@@ -2,6 +2,7 @@
 node_modules/
 tsconfig.tsbuildinfo
 data/
+.gamenote-private/
 .DS_Store
 .env
 .env.*

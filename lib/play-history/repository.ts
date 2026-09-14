@@ -26,6 +26,7 @@ type SummaryRow = Record<string, unknown> & {
   source: string;
   source_id: string;
   title: string;
+  normalized_title: string;
   title_id: string;
   platform: string;
   official_url: string;
@@ -33,7 +34,9 @@ type SummaryRow = Record<string, unknown> & {
   play_days: number | bigint;
   first_played_at: string;
   last_played_at: string;
+  time_semantics: string;
   session_count: number | bigint;
+  observation_count: number | bigint;
   link_status?: string | null;
   match_method?: string | null;
   confidence?: number | null;
@@ -266,34 +269,75 @@ export async function listRecentSessions(days: 7 | 30 | 90, now = new Date()) {
   const db = await openPlayDatabase();
   try {
     const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString();
+    const firstCalendarDay = new Date(now.getTime() - (days - 1) * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    const lastCalendarDay = now.toISOString().slice(0, 10);
     const records = readLedgerRecords(db);
     const rows = db
       .prepare(
-        `SELECT s.id, s.game_id, s.source_id, g.title, s.started_at, s.ended_at,
-          s.played_date,
-          s.duration_seconds, l.status AS link_status,
+        `WITH recent_activity AS (
+          SELECT s.id, s.game_id, s.source, s.source_id,
+            s.started_at, s.ended_at,
+            COALESCE(NULLIF(s.played_date, ''), substr(s.started_at, 1, 10)) AS played_date,
+            s.duration_seconds AS total_seconds,
+            'play_timeline' AS time_semantics, '' AS report_status,
+            '' AS image_url, s.started_at AS sort_at
+          FROM play_sessions s
+          WHERE s.time_semantics = 'play_timeline'
+            AND s.started_at >= ? AND s.started_at <= ?
+
+          UNION ALL
+
+          SELECT o.id, o.game_id, o.source, o.source_id,
+            NULL AS started_at, NULL AS ended_at, o.observed_date AS played_date,
+            o.total_seconds, o.time_semantics, o.report_status,
+            o.image_url, o.observed_at AS sort_at
+          FROM play_observations o
+          WHERE o.time_semantics = 'daily_aggregate'
+            AND o.total_seconds > 0
+            AND o.observed_date BETWEEN ? AND ?
+        )
+        SELECT a.id, a.game_id, a.source, a.source_id, g.title,
+          a.started_at, a.ended_at, a.played_date, a.time_semantics, a.report_status,
+          a.total_seconds, a.image_url, l.status AS link_status,
           l.match_method, l.confidence, l.purchase_record_id
-        FROM play_sessions s
-        JOIN play_games g ON g.id = s.game_id
+        FROM recent_activity a
+        JOIN play_games g ON g.id = a.game_id
         LEFT JOIN play_purchase_links l ON l.play_game_id = g.id
-        WHERE s.started_at >= ? AND s.started_at <= ?
-        ORDER BY s.started_at DESC, s.id ASC
+        ORDER BY a.played_date DESC, a.sort_at DESC, a.id ASC
         LIMIT 2000`,
       )
-      .all(cutoff, now.toISOString()) as Array<Record<string, unknown> & LinkColumns>;
+      .all(cutoff, now.toISOString(), firstCalendarDay, lastCalendarDay) as Array<
+      Record<string, unknown> & LinkColumns
+    >;
     return rows.map((row): RecentPlaySession => {
       const link = toLink(row, records);
-      return {
+      const common = {
         id: String(row.id),
         gameId: String(row.game_id),
         sourceId: String(row.source_id || defaultPlaySourceId),
         title: String(row.title),
-        coverUrl: coverForLink(link, records),
+        coverUrl: coverForLink(link, records) || String(row.image_url || ""),
+        playedDate: String(row.played_date),
+        durationSeconds: Number(row.total_seconds),
+        source: normalizeSource(row.source),
+        link,
+      };
+      if (row.time_semantics === "daily_aggregate")
+        return {
+          ...common,
+          startedAt: null,
+          endedAt: null,
+          timeSemantics: "daily_aggregate",
+          reportStatus: normalizeReportStatus(row.report_status),
+        };
+      return {
+        ...common,
         startedAt: String(row.started_at),
         endedAt: String(row.ended_at),
-        playedDate: String(row.played_date || String(row.started_at).slice(0, 10)),
-        durationSeconds: Number(row.duration_seconds),
-        link,
+        timeSemantics: "play_timeline",
+        reportStatus: null,
       };
     });
   } finally {
@@ -389,6 +433,7 @@ export async function getPlayTableCounts() {
     const tableNames = [
       "play_games",
       "play_sessions",
+      "play_observations",
       "play_purchase_links",
       "import_batches",
       "import_items",
@@ -597,14 +642,16 @@ function querySummaryRows(
     direction === "asc" ? "ASC" : direction === "desc" ? "DESC" : sort === "title" ? "ASC" : "DESC";
   const rows = db
     .prepare(
-      `SELECT g.id, g.source, g.source_id, g.title, g.title_id, g.platform,
+      `SELECT g.id, g.source, g.source_id, g.title, g.normalized_title, g.title_id, g.platform,
         g.official_url, g.total_seconds, g.play_days,
-        g.first_played_at, g.last_played_at,
+        g.first_played_at, g.last_played_at, g.time_semantics,
         COUNT(DISTINCT s.id) AS session_count,
+        COUNT(DISTINCT o.id) AS observation_count,
         l.status AS link_status, l.match_method, l.confidence,
         l.purchase_record_id
       FROM play_games g
       LEFT JOIN play_sessions s ON s.game_id = g.id
+      LEFT JOIN play_observations o ON o.game_id = g.id
       LEFT JOIN play_purchase_links l ON l.play_game_id = g.id
       ${where ? `WHERE ${where}` : ""}
       GROUP BY g.id
@@ -617,22 +664,42 @@ function querySummaryRows(
 function toSummary(row: SummaryRow, records: GameRecord[]): PlayGameSummary {
   const link = toLink(row, records);
   const sessionCount = Number(row.session_count || 0);
+  const observationCount = Number(row.observation_count || 0);
+  const platform = normalizePlatform(row.platform);
   return {
     id: String(row.id),
-    source: row.source === "manual" ? "manual" : "json_import",
+    source: normalizeSource(row.source),
     sourceId: String(row.source_id || defaultPlaySourceId),
+    aggregateKey: playAggregateKey(row, link, platform),
     title: String(row.title),
     titleId: String(row.title_id || ""),
-    platform: normalizePlatform(row.platform),
+    platform,
     officialUrl: String(row.official_url || ""),
     coverUrl: coverForLink(link, records),
     totalSeconds: Number(row.total_seconds || 0),
     playDays: Number(row.play_days || 0),
     firstPlayedAt: String(row.first_played_at || ""),
     lastPlayedAt: String(row.last_played_at || ""),
+    timeSemantics: normalizeTimeSemantics(row.time_semantics),
     sessionCount,
+    observationCount,
     link,
   };
+}
+
+function playAggregateKey(row: SummaryRow, link: PlayPurchaseLink | null, platform: GamePlatform) {
+  if (link?.status === "confirmed" && link.purchaseRecordId)
+    return `purchase:${link.purchaseRecordId}`;
+  const titleId = String(row.title_id || "")
+    .trim()
+    .toLowerCase();
+  if (titleId) return `title-id:${platform}:${titleId}`;
+  const title = String(row.normalized_title || normalizeTitle(String(row.title)));
+  return `title:${platform}:${title}`;
+}
+
+export function ensureSuggestedPurchaseLink(db: PlayDatabase, gameId: string, now: string) {
+  createSuggestedPurchaseLink(db, gameId, readLedgerRecords(db), now);
 }
 
 function toLink(row: LinkColumns, records: GameRecord[]): PlayPurchaseLink | null {
@@ -696,6 +763,27 @@ function latestDate(...values: string[]) {
 
 function normalizePlatform(value: unknown): GamePlatform {
   return value === "PlayStation" ? "PlayStation" : "Nintendo Switch";
+}
+
+function normalizeSource(value: unknown): PlaySource {
+  if (value === "manual" || value === "moon_connector" || value === "nintendo_store") return value;
+  return "json_import";
+}
+
+function normalizeTimeSemantics(value: unknown): PlayGameSummary["timeSemantics"] {
+  if (value === "daily_aggregate" || value === "snapshot_observation") return value;
+  return "play_timeline";
+}
+
+function normalizeReportStatus(value: unknown): RecentPlaySession["reportStatus"] {
+  if (
+    value === "CALCULATING" ||
+    value === "ACHIEVED" ||
+    value === "UNACHIEVED" ||
+    value === "UNKNOWN"
+  )
+    return value;
+  return null;
 }
 
 function parseStoredPreview(value: string) {

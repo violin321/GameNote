@@ -29,6 +29,8 @@ export function ensurePlayHistorySchema(db: PlayDatabase) {
       last_played_at TEXT NOT NULL,
       total_seconds INTEGER NOT NULL DEFAULT 0 CHECK(total_seconds >= 0),
       play_days INTEGER NOT NULL DEFAULT 0 CHECK(play_days >= 0),
+      time_semantics TEXT NOT NULL DEFAULT 'play_timeline'
+        CHECK(time_semantics IN ('play_timeline','daily_aggregate','snapshot_observation')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(source, external_id)
@@ -64,6 +66,10 @@ export function ensurePlayHistorySchema(db: PlayDatabase) {
       ended_at TEXT NOT NULL,
       played_date TEXT NOT NULL,
       duration_seconds INTEGER NOT NULL CHECK(duration_seconds BETWEEN 0 AND 31536000),
+      time_semantics TEXT NOT NULL DEFAULT 'play_timeline'
+        CHECK(time_semantics IN ('play_timeline','daily_aggregate')),
+      report_status TEXT NOT NULL DEFAULT ''
+        CHECK(report_status IN ('','CALCULATING','ACHIEVED','UNACHIEVED','UNKNOWN')),
       imported_at TEXT NOT NULL,
       UNIQUE(source, external_id)
     );
@@ -72,6 +78,35 @@ export function ensurePlayHistorySchema(db: PlayDatabase) {
       ON play_sessions(game_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_play_sessions_started
       ON play_sessions(started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS play_observations (
+      id TEXT PRIMARY KEY NOT NULL,
+      game_id TEXT NOT NULL REFERENCES play_games(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      source_id TEXT NOT NULL DEFAULT 'default',
+      external_id TEXT NOT NULL,
+      source_record_id TEXT NOT NULL DEFAULT '',
+      observed_date TEXT NOT NULL CHECK(length(observed_date) = 10),
+      observed_at TEXT NOT NULL,
+      total_seconds INTEGER NOT NULL CHECK(total_seconds >= 0),
+      play_days INTEGER NOT NULL DEFAULT 0 CHECK(play_days >= 0),
+      first_played_at TEXT NOT NULL DEFAULT '',
+      last_played_at TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL DEFAULT '',
+      time_semantics TEXT NOT NULL
+        CHECK(time_semantics IN ('daily_aggregate','snapshot_observation')),
+      report_status TEXT NOT NULL DEFAULT ''
+        CHECK(report_status IN ('','CALCULATING','ACHIEVED','UNACHIEVED','UNKNOWN')),
+      imported_at TEXT NOT NULL,
+      UNIQUE(source, source_id, external_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_play_observations_game_date
+      ON play_observations(game_id, observed_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_play_observations_recent
+      ON play_observations(time_semantics, observed_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_play_observations_source_record
+      ON play_observations(source, source_id, source_record_id);
 
     CREATE TABLE IF NOT EXISTS play_purchase_links (
       id TEXT PRIMARY KEY NOT NULL,
@@ -105,12 +140,16 @@ export function ensurePlayHistorySchema(db: PlayDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_import_items_batch
       ON import_items(batch_id, item_index);
+
   `);
 
   ensureColumn(db, "play_games", "source_id", "TEXT NOT NULL DEFAULT 'default'");
+  ensureColumn(db, "play_games", "time_semantics", "TEXT NOT NULL DEFAULT 'play_timeline'");
   ensureColumn(db, "import_batches", "source_id", "TEXT NOT NULL DEFAULT 'default'");
   ensureColumn(db, "play_sessions", "source_id", "TEXT NOT NULL DEFAULT 'default'");
   ensureColumn(db, "play_sessions", "played_date", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "play_sessions", "time_semantics", "TEXT NOT NULL DEFAULT 'play_timeline'");
+  ensureColumn(db, "play_sessions", "report_status", "TEXT NOT NULL DEFAULT ''");
 
   db.exec(`
     UPDATE play_games SET source_id = 'default' WHERE source_id = '';

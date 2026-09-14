@@ -58,6 +58,24 @@ afterEach(async () => {
 });
 
 describe("play-history repository", () => {
+  it("keeps connector audit tables out of the generic schema", async () => {
+    const db = await openPlayDatabase();
+    try {
+      const tables = new Set(
+        (
+          db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+      expect(tables.has("play_observations")).toBe(true);
+      expect(tables.has("moon_connector_accounts")).toBe(false);
+      expect(tables.has("nintendo_store_sync_snapshots")).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   it("replays preview and commit idempotently and ignores repeated sessions across batches", async () => {
     const raw = JSON.stringify(basePayload);
     const preview = validateImportPayload(basePayload);
@@ -325,6 +343,86 @@ describe("play-history repository", () => {
     ]);
   });
 
+  it("unions exact sessions with daily observations and excludes lifetime snapshots", async () => {
+    await importPayload("recent-observation-timeline", {
+      version: 1,
+      games: [
+        {
+          externalId: "timeline-observation-fixture",
+          title: "Timeline Observation Fixture",
+          titleId: "TIMELINE0001",
+          sessions: [session("timeline-recent", "2026-09-14T10:00:00Z")],
+        },
+      ],
+    });
+    const db = await openPlayDatabase();
+    try {
+      db.exec(`
+        INSERT INTO play_games(
+          id,source,source_id,external_id,title,normalized_title,title_id,official_url,platform,
+          first_played_at,last_played_at,total_seconds,play_days,time_semantics,created_at,updated_at
+        ) VALUES
+          ('daily-game','moon_connector','fixture-account','daily-game','Shared Observation Fixture',
+           'sharedobservationfixture','SHARED0001','','Nintendo Switch','2026-09-13','2026-09-13',
+           1800,1,'daily_aggregate','2026-09-14T01:00:00Z','2026-09-14T01:00:00Z'),
+          ('snapshot-game','nintendo_store','official-store','snapshot-game','Shared Observation Fixture',
+           'sharedobservationfixture','SHARED0001','','Nintendo Switch','2026-01-01','2026-09-13',
+           12000,5,'snapshot_observation','2026-09-14T01:00:00Z','2026-09-14T01:00:00Z');
+
+        INSERT INTO play_observations(
+          id,game_id,source,source_id,external_id,source_record_id,observed_date,observed_at,
+          total_seconds,play_days,first_played_at,last_played_at,image_url,time_semantics,
+          report_status,imported_at
+        ) VALUES
+          ('daily-observation','daily-game','moon_connector','fixture-account','daily-1','report-1',
+           '2026-09-13','2026-09-14T01:00:00Z',1800,1,'','',
+           'https://example.com/daily.jpg','daily_aggregate','ACHIEVED','2026-09-14T01:00:00Z'),
+          ('snapshot-observation','snapshot-game','nintendo_store','official-store','snapshot-1',
+           'snapshot-1','2026-09-14','2026-09-14T01:00:00Z',12000,5,
+           '2026-01-01','2026-09-13','','snapshot_observation','','2026-09-14T01:00:00Z');
+      `);
+    } finally {
+      db.close();
+    }
+
+    expect(await listRecentSessions(7, new Date("2026-09-14T12:00:00Z"))).toEqual([
+      expect.objectContaining({
+        title: "Timeline Observation Fixture",
+        startedAt: "2026-09-14T10:00:00.000Z",
+        endedAt: "2026-09-14T10:30:00.000Z",
+        timeSemantics: "play_timeline",
+      }),
+      expect.objectContaining({
+        title: "Shared Observation Fixture",
+        playedDate: "2026-09-13",
+        durationSeconds: 1800,
+        startedAt: null,
+        endedAt: null,
+        coverUrl: "https://example.com/daily.jpg",
+        timeSemantics: "daily_aggregate",
+        reportStatus: "ACHIEVED",
+      }),
+    ]);
+
+    const shared = await listPlayGames("title", "asc", "Shared Observation");
+    expect(shared).toHaveLength(2);
+    expect(new Set(shared.map((game) => game.aggregateKey)).size).toBe(1);
+    expect(shared).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "moon_connector",
+          sessionCount: 0,
+          observationCount: 1,
+        }),
+        expect.objectContaining({
+          source: "nintendo_store",
+          sessionCount: 0,
+          observationCount: 1,
+        }),
+      ]),
+    );
+  });
+
   it("uses the source-local played date for both timeline groups and play-day totals", async () => {
     await importPayload("source-local-day", {
       version: 1,
@@ -468,30 +566,37 @@ describe("play-history repository", () => {
       method: "official_url",
       purchaseRecordId: "purchase-auto",
     });
+    expect(game.aggregateKey).toBe("title-id:Nintendo Switch:title0001");
     expect(await listUnlinkedPlayGames()).toHaveLength(1);
 
     await decidePurchaseLink(game.id, "confirm", "purchase-auto", "owner");
-    expect((await listPlayGames("recent", "desc", "Skyward"))[0].link).toMatchObject({
+    const confirmed = (await listPlayGames("recent", "desc", "Skyward"))[0];
+    expect(confirmed.link).toMatchObject({
       status: "confirmed",
       method: "manual",
       purchaseRecordId: "purchase-auto",
     });
+    expect(confirmed.aggregateKey).toBe("purchase:purchase-auto");
     expect(await listUnlinkedPlayGames()).toHaveLength(0);
 
     await decidePurchaseLink(game.id, "reject", null, "owner");
-    expect((await listPlayGames("recent", "desc", "Skyward"))[0].link).toMatchObject({
+    const rejected = (await listPlayGames("recent", "desc", "Skyward"))[0];
+    expect(rejected.link).toMatchObject({
       status: "rejected",
       purchaseRecordId: null,
     });
+    expect(rejected.aggregateKey).toBe("title-id:Nintendo Switch:title0001");
     expect(await listUnlinkedPlayGames()).toHaveLength(1);
 
     await decidePurchaseLink(game.id, "confirm", "purchase-other", "owner");
-    expect((await listPlayGames("recent", "desc", "Skyward"))[0].link).toMatchObject({
+    const replaced = (await listPlayGames("recent", "desc", "Skyward"))[0];
+    expect(replaced.link).toMatchObject({
       status: "confirmed",
       method: "manual",
       purchaseRecordId: "purchase-other",
       purchaseTitle: "Alternate Edition",
     });
+    expect(replaced.aggregateKey).toBe("purchase:purchase-other");
   });
 
   it("only creates automatic collection suggestions within the same platform", async () => {

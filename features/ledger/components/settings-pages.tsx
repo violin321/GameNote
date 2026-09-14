@@ -13,6 +13,7 @@ import type {
 import { ModelCombobox } from "./model-combobox";
 import { PsPlusHistory } from "./ps-plus-history";
 import { ConfirmationDialog } from "./confirmation-dialog";
+import { NintendoPlaySources } from "./nintendo-play-sources";
 
 type SettingsUpdater = Dispatch<SetStateAction<SettingsState>>;
 
@@ -72,7 +73,7 @@ export function SettingsPage({
       <header>
         <p className="ledger-kicker">Settings</p>
         <h2>设置</h2>
-        <span>管理内容展示、外观、AI 识别、数据备份和账户安全</span>
+        <span>管理内容展示、外观、Nintendo 游玩数据、AI 识别、数据备份和账户安全</span>
       </header>
       <section className="settings-section">
         <div>
@@ -108,6 +109,7 @@ export function SettingsPage({
           </label>
         </div>
       </section>
+      <NintendoPlaySources />
       <section className="settings-section">
         <div>
           <h3>内容展示</h3>

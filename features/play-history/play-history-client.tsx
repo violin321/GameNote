@@ -52,13 +52,18 @@ export function PlayHistoryClient({ mode, purchases }: { mode: Mode; purchases: 
     return () => window.clearTimeout(timeout);
   }, [load, query]);
 
-  const gameStats = useMemo(
-    () => ({
-      seconds: games.reduce((sum, game) => sum + game.totalSeconds, 0),
-      days: games.reduce((sum, game) => sum + game.playDays, 0),
-    }),
-    [games],
-  );
+  const gameStats = useMemo(() => {
+    const logicalGames = new Map<string, PlayGameSummary[]>();
+    for (const game of games)
+      logicalGames.set(game.aggregateKey, [...(logicalGames.get(game.aggregateKey) || []), game]);
+    const selected = [...logicalGames.values()].map(preferredAggregate);
+    return {
+      seconds: selected.reduce((sum, game) => sum + game.totalSeconds, 0),
+      days: selected.reduce((sum, game) => sum + game.playDays, 0),
+      logicalCount: selected.length,
+      deduplicated: selected.length < games.length,
+    };
+  }, [games]);
   const recentStats = useMemo(
     () => ({
       seconds: sessions.reduce((sum, session) => sum + session.durationSeconds, 0),
@@ -81,10 +86,16 @@ export function PlayHistoryClient({ mode, purchases }: { mode: Mode; purchases: 
           <>
             <Stat
               label={mode === "unlinked" ? "待关联" : "游戏数量"}
-              value={`${games.length} 款`}
+              value={`${mode === "unlinked" ? games.length : gameStats.logicalCount} 款`}
             />
-            <Stat label="累计时长" value={formatDuration(gameStats.seconds)} />
-            <Stat label="游玩天数" value={`${gameStats.days} 天`} />
+            <Stat
+              label={gameStats.deduplicated ? "去重累计时长" : "累计时长"}
+              value={formatDuration(gameStats.seconds)}
+            />
+            <Stat
+              label={gameStats.deduplicated ? "去重游玩天数" : "游玩天数"}
+              value={`${gameStats.days} 天`}
+            />
           </>
         )}
       </div>
@@ -180,7 +191,9 @@ export function PlayHistoryClient({ mode, purchases }: { mode: Mode; purchases: 
                       <div>
                         <strong>{session.title}</strong>
                         <span>
-                          {formatTime(session.startedAt)}–{formatTime(session.endedAt)}
+                          {session.timeSemantics === "daily_aggregate"
+                            ? dailyActivityLabel(session)
+                            : `${formatTime(session.startedAt)}–${formatTime(session.endedAt)}`}
                         </span>
                       </div>
                       <b>{formatDuration(session.durationSeconds)}</b>
@@ -208,17 +221,24 @@ export function PlayHistoryClient({ mode, purchases }: { mode: Mode; purchases: 
                   <div>
                     <h2>{game.title}</h2>
                     <p>
-                      {game.platform || "游戏平台"} · {game.sessionCount} 条记录
+                      {game.platform || "游戏平台"} · {sourceLabel(game.source)} ·{" "}
+                      {game.timeSemantics === "play_timeline"
+                        ? `${game.sessionCount} 条记录`
+                        : game.timeSemantics === "daily_aggregate"
+                          ? `${game.observationCount} 条日报`
+                          : game.observationCount
+                            ? `Store 累计值 · ${game.observationCount} 条近期日报`
+                            : "Store 累计值"}
                     </p>
                   </div>
                 </div>
                 <dl className="play-game-metrics">
                   <div>
-                    <dt>累计时长</dt>
+                    <dt>{durationMetricLabel(game.timeSemantics)}</dt>
                     <dd>{formatDuration(game.totalSeconds)}</dd>
                   </div>
                   <div>
-                    <dt>游玩天数</dt>
+                    <dt>{daysMetricLabel(game.timeSemantics)}</dt>
                     <dd>{game.playDays} 天</dd>
                   </div>
                   <div>
@@ -240,7 +260,7 @@ export function PlayHistoryClient({ mode, purchases }: { mode: Mode; purchases: 
             hint={
               mode === "unlinked"
                 ? "已关联的游戏会保留在历史游玩中。"
-                : "选择 JSON 文件预览并导入第一批记录。"
+                : "可导入 JSON，或在设置中连接家长控制与 Nintendo Store。"
             }
           />
         )
@@ -269,10 +289,44 @@ function GameCover({ title, url }: { title: string; url: string }) {
 function groupSessions(sessions: RecentPlaySession[]) {
   const grouped = new Map<string, RecentPlaySession[]>();
   for (const session of sessions) {
-    const date = session.playedDate || localDate(session.startedAt);
+    const date = session.playedDate || (session.startedAt ? localDate(session.startedAt) : "");
+    if (!date) continue;
     grouped.set(date, [...(grouped.get(date) || []), session]);
   }
   return [...grouped.entries()].sort(([left], [right]) => right.localeCompare(left));
+}
+
+function preferredAggregate(games: PlayGameSummary[]) {
+  const storeSnapshot = games
+    .filter(
+      (game) => game.source === "nintendo_store" && game.timeSemantics === "snapshot_observation",
+    )
+    .sort(compareAggregateRecency)[0];
+  if (storeSnapshot) return storeSnapshot;
+  return [...games].sort((left, right) => {
+    if (left.timeSemantics !== right.timeSemantics)
+      return left.timeSemantics === "play_timeline" ? -1 : 1;
+    return compareAggregateRecency(left, right);
+  })[0];
+}
+
+function compareAggregateRecency(left: PlayGameSummary, right: PlayGameSummary) {
+  return (
+    right.lastPlayedAt.localeCompare(left.lastPlayedAt) ||
+    right.totalSeconds - left.totalSeconds ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function durationMetricLabel(semantics: PlayGameSummary["timeSemantics"]) {
+  if (semantics === "daily_aggregate") return "日报合计";
+  if (semantics === "snapshot_observation") return "Store 累计时长";
+  return "累计时长";
+}
+
+function daysMetricLabel(semantics: PlayGameSummary["timeSemantics"]) {
+  if (semantics === "daily_aggregate") return "有记录日报";
+  return "游玩天数";
 }
 
 function formatDuration(seconds: number) {
@@ -305,4 +359,17 @@ function formatDay(value: string) {
 function localDate(value: string) {
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function sourceLabel(source: PlayGameSummary["source"]) {
+  if (source === "moon_connector") return "家长控制日报";
+  if (source === "nintendo_store") return "Nintendo Store";
+  if (source === "manual") return "手动记录";
+  return "JSON 导入";
+}
+
+function dailyActivityLabel(session: RecentPlaySession) {
+  const source = session.source === "moon_connector" ? "家长控制日报" : "Store 日报";
+  if (session.reportStatus === "CALCULATING") return `${source} · 当天仍在计算`;
+  return source;
 }

@@ -10,5 +10,42 @@ services:
       PS_PLUS_CATALOG_REFRESH_HOURS: ${PS_PLUS_CATALOG_REFRESH_HOURS:-12}
       JWT_SECRET: ${JWT_SECRET:?请复制 .env.example 为 .env，并配置 JWT_SECRET}
       APP_DATABASE_FILE: "/data/records.sqlite"
+      MOON_SIDECAR_SOCKET_PATH: "/data/private/moon-ipc/run/sidecar.sock"
+      MOON_SIDECAR_API_KEY_FILE: "/data/private/moon-ipc/secrets/api-key"
+      MOON_SCHEDULER_STATE_FILE: "/data/private/moon-app/scheduler.sqlite"
+      MOON_AUTO_SYNC_ENABLED: ${MOON_AUTO_SYNC_ENABLED:-0}
+      MOON_LOCALE: ${MOON_LOCALE:-en-US}
+      MOON_TIME_ZONE: ${MOON_TIME_ZONE:-UTC}
+      NINTENDO_STORE_DATA_DIR: "/data/private/nintendo-store"
+      NINTENDO_STORE_AUTO_SYNC_ENABLED: ${NINTENDO_STORE_AUTO_SYNC_ENABLED:-0}
     volumes:
       - ./data:/data
+      - moon-ipc:/data/private/moon-ipc:ro
+
+  moon-sidecar:
+    image: ${GAMENOTE_IMAGE:-dingding229/gamenote:latest}
+    container_name: gamenote-moon
+    restart: unless-stopped
+    init: true
+    profiles:
+      - nintendo-play
+    environment:
+      MOON_LOCALE: ${MOON_LOCALE:-en-US}
+      MOON_TIME_ZONE: ${MOON_TIME_ZONE:-UTC}
+    volumes:
+      - moon-runtime:/data/private/moon
+      - moon-ipc:/data/private/moon-ipc
+    command:
+      - sh
+      - -c
+      - >-
+        node services/moon-sidecar/cli.mjs init
+        --directory /data/private/moon
+        --ipc-directory /data/private/moon-ipc &&
+        exec node services/moon-sidecar/cli.mjs serve
+        --directory /data/private/moon
+        --ipc-directory /data/private/moon-ipc
+
+volumes:
+  moon-runtime:
+  moon-ipc:
