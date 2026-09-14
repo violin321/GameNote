@@ -349,7 +349,8 @@ export function platformPath(platform: GamePlatform) {
   return platform === "PlayStation" ? "/playstation" : "/nintendo-switch";
 }
 export function platformFromPath(pathname: string): GamePlatform | null {
-  if (pathname.startsWith("/memberships")) return "Nintendo Switch";
+  if (pathname.startsWith("/memberships") || pathname.startsWith("/play/"))
+    return "Nintendo Switch";
   if (pathname.startsWith("/ps-plus-catalog") || pathname.startsWith("/playstation"))
     return "PlayStation";
   if (pathname === "/" || pathname.startsWith("/nintendo-switch")) return "Nintendo Switch";
@@ -370,7 +371,13 @@ export function setViewUrl(view: ActiveView, mode: "push" | "replace" = "push") 
       ? "/ps-plus-catalog"
       : view === "memberships"
         ? "/memberships"
-        : platformPath(platformFromPath(window.location.pathname) || "Nintendo Switch");
+        : view === "play-recent"
+          ? "/play/recent"
+          : view === "play-history"
+            ? "/play/history"
+            : view === "play-unlinked"
+              ? "/play/unlinked"
+              : platformPath(platformFromPath(window.location.pathname) || "Nintendo Switch");
   if (window.location.pathname === path) return;
   window.history[mode === "push" ? "pushState" : "replaceState"]({ view }, "", path);
 }

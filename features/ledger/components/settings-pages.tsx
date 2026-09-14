@@ -223,7 +223,10 @@ export function SettingsPage({
       <section className="settings-section">
         <div>
           <h3>数据备份</h3>
-          <p>备份购买记录与应用设置；AI API Key 和账户密码不会导出。</p>
+          <p>
+            JSON 只备份购买记录与应用设置，不包含游玩历史。完整备份请复制 SQLite；AI API Key
+            和账户密码不会导出。
+          </p>
         </div>
         <div className="settings-fields">
           <div className="settings-actions settings-wide">

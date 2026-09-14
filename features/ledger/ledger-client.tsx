@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PlayHistoryClient } from "@/features/play-history/play-history-client";
 import { normalizeChineseSearchText } from "@/lib/game/title-normalization";
 import { ledgerLimits } from "@/lib/ledger/limits";
 import { defaultThemeColor, themeColorContent } from "@/lib/ui/theme-color";
@@ -614,7 +615,13 @@ export default function LedgerClient({
             ? "ps-plus-catalog"
             : window.location.pathname.startsWith("/memberships")
               ? "memberships"
-              : "records",
+              : window.location.pathname.startsWith("/play/recent")
+                ? "play-recent"
+                : window.location.pathname.startsWith("/play/history")
+                  ? "play-history"
+                  : window.location.pathname.startsWith("/play/unlinked")
+                    ? "play-unlinked"
+                    : "records",
         );
       }
     }
@@ -966,7 +973,13 @@ export default function LedgerClient({
       setPlatformUrl(activePlatform, "push");
       return;
     }
-    if (view === "ps-plus-catalog" || view === "memberships") {
+    if (
+      view === "ps-plus-catalog" ||
+      view === "memberships" ||
+      view === "play-recent" ||
+      view === "play-history" ||
+      view === "play-unlinked"
+    ) {
       setActiveView(view);
       setViewUrl(view);
       return;
@@ -1454,12 +1467,41 @@ export default function LedgerClient({
         ]
       : []),
   ];
+  const playToolbarItems: ToolbarGroup["items"] =
+    accessStatus === "unlocked"
+      ? [
+          {
+            id: "play-recent",
+            label: "最近游玩",
+            icon: "近",
+            active: activeView === "play-recent",
+            onSelect: () => switchView("play-recent"),
+          },
+          {
+            id: "play-history",
+            label: "历史游玩",
+            icon: "史",
+            active: activeView === "play-history",
+            onSelect: () => switchView("play-history"),
+          },
+          {
+            id: "play-unlinked",
+            label: "关联收藏",
+            icon: "联",
+            active: activeView === "play-unlinked",
+            onSelect: () => switchView("play-unlinked"),
+          },
+        ]
+      : [];
   const toolbarGroups: ToolbarGroup[] = [
     {
       id: "library",
       label: "游戏库",
       items: libraryToolbarItems,
     },
+    ...(playToolbarItems.length
+      ? [{ id: "play", label: "游玩记录", items: playToolbarItems }]
+      : []),
     ...(toolToolbarItems.length ? [{ id: "tools", label: "工具", items: toolToolbarItems }] : []),
     ...(accessStatus === "unlocked"
       ? [
@@ -1480,6 +1522,23 @@ export default function LedgerClient({
       : []),
   ];
   const mobileToolbarGroups = toolbarGroups.filter((group) => group.id !== "manage");
+  const playHeader =
+    activeView === "play-recent"
+      ? {
+          title: "最近游玩",
+          description: "按日期查看近期每一段游玩记录",
+        }
+      : activeView === "play-history"
+        ? {
+            title: "历史游玩",
+            description: "汇总累计时长，并把游玩数据关联到现有收藏",
+          }
+        : activeView === "play-unlinked"
+          ? {
+              title: "关联收藏",
+              description: "确认自动建议，或手动选择对应的游戏收藏",
+            }
+          : null;
 
   return (
     <main className="ledger-page min-h-screen text-base-content">
@@ -1519,23 +1578,29 @@ export default function LedgerClient({
             <div className="header-primary-row">
               <div className="min-w-0">
                 <p className="ledger-kicker">
-                  {activeView === "ps-plus-catalog"
-                    ? "PlayStation Plus"
-                    : activeView === "memberships"
-                      ? "Memberships"
-                      : platformLabel(activePlatform)}
+                  {playHeader
+                    ? "Play history"
+                    : activeView === "ps-plus-catalog"
+                      ? "PlayStation Plus"
+                      : activeView === "memberships"
+                        ? "Memberships"
+                        : platformLabel(activePlatform)}
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-normal">
-                  {activeView === "ps-plus-catalog"
-                    ? "PS Plus 游戏库"
-                    : activeView === "memberships"
-                      ? "会员记录"
-                      : activePlatform === "PlayStation"
-                        ? "PlayStation 游戏"
-                        : "NS 游戏"}
+                  {playHeader
+                    ? playHeader.title
+                    : activeView === "ps-plus-catalog"
+                      ? "PS Plus 游戏库"
+                      : activeView === "memberships"
+                        ? "会员记录"
+                        : activePlatform === "PlayStation"
+                          ? "PlayStation 游戏"
+                          : "NS 游戏"}
                 </h1>
                 <p className="mt-1 text-sm text-base-content/60">
-                  {activeView === "ps-plus-catalog" ? (
+                  {playHeader ? (
+                    playHeader.description
+                  ) : activeView === "ps-plus-catalog" ? (
                     "浏览港区升级与高级完整会员游戏目录"
                   ) : activeView === "memberships" ? (
                     "记录 NS 与 PS 会员状态和到期时间"
@@ -1966,6 +2031,21 @@ export default function LedgerClient({
                   onDisplayModeChange={changeCatalogDisplayMode}
                   onLoad={loadPsPlusCatalog}
                   onLoadMore={(increment) => setCatalogVisibleCount((count) => count + increment)}
+                />
+              ) : null}
+
+              {activeView === "play-recent" ||
+              activeView === "play-history" ||
+              activeView === "play-unlinked" ? (
+                <PlayHistoryClient
+                  mode={
+                    activeView === "play-recent"
+                      ? "recent"
+                      : activeView === "play-history"
+                        ? "history"
+                        : "unlinked"
+                  }
+                  purchases={records}
                 />
               ) : null}
 

@@ -1,6 +1,6 @@
 # GameNote
 
-GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支持 Nintendo Switch、PlayStation、PS Plus 游戏目录、会员记录、价格统计、JSON 备份和 AI 订单截图识别。
+GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支持 Nintendo Switch、PlayStation、游玩历史、PS Plus 游戏目录、会员记录、价格统计、JSON 备份和 AI 订单截图识别。
 
 应用采用 Next.js、React、TypeScript 与 SQLite 构建，默认通过 Docker Compose 部署。游客可以只读浏览收藏，管理员登录后才能修改数据和使用管理工具。
 
@@ -22,6 +22,13 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 - PlayStation 香港商店的游戏名称、封面、官方页面和价格。
 - 可按游戏名称搜索，也可粘贴官方页面 URL 获取数据。
 - 官方页面或接口改版后，相应解析规则可能需要更新。
+
+### 游玩历史
+
+- 通过通用 JSON 格式导入带开始、结束时间的游玩记录，导入前先进行服务端校验和预览。
+- “最近游玩”按日期展示最近 7、30 或 90 天的游玩时间线；“历史游玩”汇总每款游戏的累计时长、游玩天数和首次/最后游玩时间。
+- 按官方 URL 或规范化标题建议对应收藏，也可以手动选择、忽略建议或重新关联。
+- 游玩数据与收藏保存在同一个 SQLite 文件中，但使用独立数据表；删除收藏不会删除游玩历史。
 
 ### PS Plus 与会员
 
@@ -70,6 +77,7 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 | 官方游戏数据查询           |      |   ✓    |
 | AI 购买截图识别            |      |   ✓    |
 | 会员记录和会免同步         |      |   ✓    |
+| 游玩历史、导入与收藏关联   |      |   ✓    |
 | JSON 导入、导出与分享图    |      |   ✓    |
 | 网站、内容与 AI 设置       |      |   ✓    |
 
@@ -231,7 +239,38 @@ docker stop gamenote
 1. 定期在“设置 → 数据备份”中导出 JSON。
 2. 停止容器后复制 `data/records.sqlite`。
 
-JSON 备份可以在设置页面直接导入。SQLite 备份应在容器停止后替换，避免复制写入中的数据库文件。
+设置页的 JSON 备份只包含购买记录与应用设置，不包含游玩历史、关联结果和导入批次。要完整备份这些数据，请停止容器后复制 `data/records.sqlite`；恢复 SQLite 时也应保持容器停止，避免复制写入中的数据库文件。
+
+### 游玩记录导入格式
+
+游玩历史页面接受不超过 2 MB 的 JSON 文件。每个游戏和会话都需要稳定、非敏感的 `externalId`，时间必须包含 `Z` 或明确的时区偏移。示例：
+
+```json
+{
+  "version": 1,
+  "sourceId": "example-console",
+  "games": [
+    {
+      "externalId": "example-game-1",
+      "title": "Skyward Atlas",
+      "platform": "Nintendo Switch",
+      "titleId": "EXAMPLE0001",
+      "officialUrl": "https://example.com/games/skyward-atlas",
+      "sessions": [
+        {
+          "externalId": "example-session-1",
+          "startedAt": "2026-09-13T20:00:00+08:00",
+          "endedAt": "2026-09-13T21:30:00+08:00",
+          "playedDate": "2026-09-13",
+          "durationSeconds": 5400
+        }
+      ]
+    }
+  ]
+}
+```
+
+`sourceId` 是区分不同导出器的稳定命名空间；`playedDate` 可选，用于明确来源记录中的本地游玩日期，省略时取 `startedAt` 中的日期。不要在这些字段中放入账号、Token、设备序列号等敏感信息。相同 `sourceId` 和 `externalId` 的会话只会保存一次；再次导入同一文件是幂等的。
 
 ## 本地开发与质量检查
 
@@ -262,6 +301,7 @@ app/
   playstation/                 PlayStation 页面
   ps-plus-catalog/             PS Plus 游戏目录页面
   memberships/                 会员记录页面
+  play/                        最近游玩、历史游玩和收藏关联页面
 features/ledger/
   components/                  工具栏、设置、会员和目录组件
   hooks/                       弹窗焦点与键盘复用逻辑
@@ -269,10 +309,12 @@ features/ledger/
   storage.ts                   浏览器端数据访问和导入规范化
   types.ts                     前端领域类型
   utils.ts                     统计、格式化和分享图工具
+features/play-history/         游玩记录列表、导入和收藏关联界面
 lib/
   auth/                        密码、登录限流、JWT 与访问校验
   game/                        标题规范化、翻译和官方名称解析
   ledger/                      数据限制、领域结构与 SQLite 仓储
+  play-history/                游玩导入校验、数据表和查询仓储
   ui/                          主题色可读性工具
 tests/                          Vitest 自动测试
 public/                         静态资源

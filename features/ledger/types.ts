@@ -35,7 +35,15 @@ export type GameRecord = {
 export type FormState = Omit<GameRecord, "id">;
 export type AccessStatus = "checking" | "locked" | "unlocked";
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
-export type ActiveView = "records" | "form" | "settings" | "ps-plus-catalog" | "memberships";
+export type ActiveView =
+  | "records"
+  | "form"
+  | "settings"
+  | "ps-plus-catalog"
+  | "memberships"
+  | "play-recent"
+  | "play-history"
+  | "play-unlinked";
 export type RecordDisplayMode = "grid" | "list";
 
 export type VersionInfo = {
