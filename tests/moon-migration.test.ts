@@ -102,7 +102,75 @@ function assertPreserved(db: DatabaseSync) {
   ]);
 }
 
+async function seedLegacyMoonArtifactV3() {
+  await seedV2();
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(`INSERT INTO schema_migrations(version,name,applied_at)
+      VALUES(3,'moon_artifact_v1','2026-09-11');
+      UPDATE app_metadata SET value='3' WHERE key='schema_version';`);
+  } finally {
+    db.close();
+  }
+}
+
 describe("Moon schema v3 safety", () => {
+  it.each(["repository", "startup CLI"])(
+    "upgrades a deployment-specific v3 Moon artifact with the %s migration path",
+    async (migrationPath) => {
+      await seedLegacyMoonArtifactV3();
+      if (migrationPath === "repository") {
+        await migratePlayDatabase();
+        await migratePlayDatabase();
+      } else {
+        const run = () =>
+          promisify(execFile)(process.execPath, ["scripts/migrate-play-history.mjs"], {
+            cwd: process.cwd(),
+            env: { ...process.env, APP_DATABASE_FILE: path },
+          });
+        await run();
+        await run();
+      }
+      await verifyPlayDatabaseHealth();
+
+      const db = new DatabaseSync(path);
+      try {
+        expect(db.prepare("SELECT name FROM schema_migrations WHERE version=3").get()).toEqual({
+          name: "moon_artifact_v1",
+        });
+        expect(
+          db.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get(),
+        ).toEqual({
+          value: "6",
+        });
+        const schema = db.prepare("SELECT sql FROM sqlite_master WHERE name='play_games'").get()
+          ?.sql as string;
+        expect(schema).toContain("'moon_connector'");
+        expect(schema).toContain("'nintendo_store'");
+        expect(
+          db.prepare("SELECT name FROM sqlite_master WHERE name='moon_connector_accounts'").get(),
+        ).toEqual({ name: "moon_connector_accounts" });
+        expect(
+          db.prepare("SELECT id,custom_note FROM play_games WHERE id='game-old'").get(),
+        ).toEqual({
+          id: "game-old",
+          custom_note: "user note",
+        });
+        expect(db.prepare("SELECT id,play_game_id FROM play_purchase_links").get()).toEqual({
+          id: "link-old",
+          play_game_id: "game-old",
+        });
+        expect(db.prepare("SELECT * FROM moon_daily_reports").all()).toEqual([
+          { legacy_id: "legacy-report", official_date: "2026-08-31" },
+        ]);
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("preserves child rows, manual associations, custom columns/indexes/triggers and legacy Moon data", async () => {
     await seedV2();
     await migratePlayDatabase();

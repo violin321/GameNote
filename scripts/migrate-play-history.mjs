@@ -2,7 +2,7 @@ import { readFile, mkdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerPurchaseProjectionSqlFunctions } from "./purchase-projection-json.mjs";
-import { widenMoonGameSource } from "./moon-migration.mjs";
+import { reconcileLegacyMoonV3, widenMoonGameSource } from "./moon-migration.mjs";
 import { widenStoreGameSource } from "./store-migration.mjs";
 
 const configured = process.env.APP_DATABASE_FILE?.trim();
@@ -63,6 +63,7 @@ try {
         ? db.prepare("SELECT 1 FROM schema_migrations WHERE version=?").get(version)
         : false;
       if (alreadyApplied) {
+        if (version === 3) await reconcileLegacyMoonV3(db);
         if (version === 6)
           db.exec(
             await readFile(

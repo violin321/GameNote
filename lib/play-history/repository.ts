@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { registerPurchaseProjectionSqlFunctions } from "../../scripts/purchase-projection-json.mjs";
-import { widenMoonGameSource } from "../../scripts/moon-migration.mjs";
+import { reconcileLegacyMoonV3, widenMoonGameSource } from "../../scripts/moon-migration.mjs";
 import { widenStoreGameSource } from "../../scripts/store-migration.mjs";
 import {
   ensureAllPlayGameEntityBindings,
@@ -101,6 +101,7 @@ async function applyMigration(db: DatabaseSync, version: number, name: string, f
     migrationTable &&
     db.prepare("SELECT 1 FROM schema_migrations WHERE version = ?").get(version)
   ) {
+    if (version === 3) await reconcileLegacyMoonV3(db);
     if (version === 6) await reconcileGameEntitySchema(db);
     return;
   }
