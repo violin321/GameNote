@@ -57,7 +57,8 @@ export type StoreCollectResult = {
   history: {
     playHistories: StoreHistoryItem[];
     recentPlayHistories?:
-      StoreRecentDay[] | { count?: unknown; dates?: unknown; days?: StoreRecentDay[] };
+      | StoreRecentDay[]
+      | { count?: unknown; dates?: unknown; days?: StoreRecentDay[] };
     lastUpdatedAt?: unknown;
   };
   authentication?: string;

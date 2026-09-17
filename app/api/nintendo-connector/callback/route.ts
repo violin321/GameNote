@@ -28,10 +28,10 @@ export async function POST(request: NextRequest) {
 function isCallback(value: unknown): value is { callbackUrl: string } {
   return Boolean(
     value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    typeof (value as { callbackUrl?: unknown }).callbackUrl === "string" &&
-    (value as { callbackUrl: string }).callbackUrl.length <= 4096,
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 1 &&
+      typeof (value as { callbackUrl?: unknown }).callbackUrl === "string" &&
+      (value as { callbackUrl: string }).callbackUrl.length <= 4096,
   );
 }

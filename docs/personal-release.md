@@ -6,7 +6,7 @@
 
 ## 现有发布工作流
 
-`.github/workflows/publish-docker.yml` 在 `v*` 标签或手动触发时才构建并推送镜像，不因普通代码提交自动推送。它先调用质量工作流（格式、Lint、类型、测试、生产构建），再使用 `Dockerfile` 构建 `linux/amd64` 和 `linux/arm64`，发布到 `${DOCKERHUB_USERNAME}/gamenote`。标签为 `sha-<提交短哈希>` 和语义化版本；从默认分支手动触发时还会产生 `latest`。正式部署应固定语义化版本或 SHA，不依赖 `latest`。
+`.github/workflows/publish-docker.yml` 在 `v*` 标签或手动触发时才构建并推送镜像，不因普通代码提交自动推送。它先调用质量工作流（锁文件安装、依赖安全审计、格式、Lint、类型、测试、生产构建），再使用 `Dockerfile` 构建 `linux/amd64` 和 `linux/arm64`，发布到 `${DOCKERHUB_USERNAME}/gamenote`。标签为 `sha-<提交短哈希>` 和语义化版本；从默认分支手动触发时还会产生 `latest`。正式部署应固定语义化版本或 SHA，不依赖 `latest`。
 
 在许可、源代码审核和 Docker Hub 账号确认后，先在 Fork 的仓库 Settings → Secrets and variables → Actions 中设置：
 

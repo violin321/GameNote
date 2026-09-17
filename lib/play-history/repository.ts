@@ -408,15 +408,17 @@ export async function listRecentSessions(days: 7 | 30 | 90, now = new Date()) {
         LIMIT 2000`,
       )
       .all(cutoff) as Array<Record<string, unknown>>;
-    return rows.map((row): RecentPlaySession => ({
-      id: String(row.id),
-      gameId: String(row.game_id),
-      title: String(row.title),
-      coverUrl: String(row.cover_url || ""),
-      startedAt: String(row.started_at),
-      endedAt: String(row.ended_at),
-      durationSeconds: Number(row.duration_seconds),
-    }));
+    return rows.map(
+      (row): RecentPlaySession => ({
+        id: String(row.id),
+        gameId: String(row.game_id),
+        title: String(row.title),
+        coverUrl: String(row.cover_url || ""),
+        startedAt: String(row.started_at),
+        endedAt: String(row.ended_at),
+        durationSeconds: Number(row.duration_seconds),
+      }),
+    );
   } finally {
     db.close();
   }
@@ -468,20 +470,22 @@ export async function listRecentPlayActivity(days: 7 | 30 | 90, now = new Date()
       .all(cutoff, now.toISOString(), `-${days - 1} days`, now.toISOString()) as Array<
       Record<string, unknown>
     >;
-    return rows.map((row): RecentPlayActivity => ({
-      id: String(row.id),
-      gameId: String(row.game_id),
-      title: String(row.title),
-      platform: String(row.platform || ""),
-      coverUrl: String(row.cover_url || ""),
-      occurredAt: String(row.occurred_at),
-      endedAt: row.ended_at ? String(row.ended_at) : null,
-      seconds: Number(row.seconds),
-      timeSemantics: row.time_semantics as RecentPlayActivity["timeSemantics"],
-      source: row.source as RecentPlayActivity["source"],
-      date: row.official_date ? String(row.official_date) : null,
-      reportStatus: row.report_status as RecentPlayActivity["reportStatus"],
-    }));
+    return rows.map(
+      (row): RecentPlayActivity => ({
+        id: String(row.id),
+        gameId: String(row.game_id),
+        title: String(row.title),
+        platform: String(row.platform || ""),
+        coverUrl: String(row.cover_url || ""),
+        occurredAt: String(row.occurred_at),
+        endedAt: row.ended_at ? String(row.ended_at) : null,
+        seconds: Number(row.seconds),
+        timeSemantics: row.time_semantics as RecentPlayActivity["timeSemantics"],
+        source: row.source as RecentPlayActivity["source"],
+        date: row.official_date ? String(row.official_date) : null,
+        reportStatus: row.report_status as RecentPlayActivity["reportStatus"],
+      }),
+    );
   } finally {
     db.close();
   }
@@ -638,13 +642,15 @@ export async function listPurchasePlaySummaries() {
         GROUP BY purchase_record_id`,
       )
       .all() as Array<Record<string, unknown>>;
-    return rows.map((row): PurchasePlaySummary => ({
-      purchaseRecordId: String(row.purchase_record_id),
-      totalSeconds: Number(row.total_seconds || 0),
-      firstPlayedAt: String(row.first_played_at || ""),
-      lastPlayedAt: String(row.last_played_at || ""),
-      timeSemantics: combinedTimeSemantics(String(row.sources || "")),
-    }));
+    return rows.map(
+      (row): PurchasePlaySummary => ({
+        purchaseRecordId: String(row.purchase_record_id),
+        totalSeconds: Number(row.total_seconds || 0),
+        firstPlayedAt: String(row.first_played_at || ""),
+        lastPlayedAt: String(row.last_played_at || ""),
+        timeSemantics: combinedTimeSemantics(String(row.sources || "")),
+      }),
+    );
   } finally {
     db.close();
   }
@@ -819,7 +825,8 @@ export async function createManualPlayEntry(input: ManualPlayEntryInput, decided
         const strongKey = gameEntityStrongKey(titleId, purchase.platform_variant);
         const strong = strongKey
           ? (db.prepare("SELECT id FROM game_entities WHERE strong_key=?").get(strongKey) as
-              { id: string } | undefined)
+              | { id: string }
+              | undefined)
           : undefined;
         const official =
           !strong?.id && officialUrl

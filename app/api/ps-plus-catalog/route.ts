@@ -82,14 +82,14 @@ function normalizeCachedPayload(value: unknown): CatalogPayload | null {
   const games = source.games.filter((game): game is CatalogGame =>
     Boolean(
       game &&
-      typeof game === "object" &&
-      typeof game.id === "string" &&
-      typeof game.title === "string" &&
-      typeof game.localizedTitle === "string" &&
-      typeof game.coverUrl === "string" &&
-      typeof game.officialUrl === "string" &&
-      Array.isArray(game.platforms) &&
-      typeof game.tier === "string",
+        typeof game === "object" &&
+        typeof game.id === "string" &&
+        typeof game.title === "string" &&
+        typeof game.localizedTitle === "string" &&
+        typeof game.coverUrl === "string" &&
+        typeof game.officialUrl === "string" &&
+        Array.isArray(game.platforms) &&
+        typeof game.tier === "string",
     ),
   );
   return games.length ? { fetchedAt: source.fetchedAt, games } : null;

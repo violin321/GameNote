@@ -87,7 +87,8 @@ export async function fetchLedgerFromServer(): Promise<
 > {
   const response = await fetch("/api/records", { cache: "no-store" });
   const payload = (await response.json().catch(() => ({}))) as
-    Partial<LedgerDocument> | { error?: string };
+    | Partial<LedgerDocument>
+    | { error?: string };
   if (!response.ok)
     throw new Error(
       "error" in payload && payload.error

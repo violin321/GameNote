@@ -49,23 +49,25 @@ export async function POST(request: NextRequest) {
                 normalizeTitle(record.title) === normalizeTitle(title),
             ),
         )
-        .map((title): GameRecord => ({
-          id: crypto.randomUUID(),
-          platform: "PlayStation",
-          title,
-          price: 0,
-          currency: "CNY",
-          purchaseDate: new Date().toISOString().slice(0, 10),
-          region: "其他",
-          format: "数字版",
-          seller: "PlayStation Plus",
-          coverUrl: "",
-          officialUrl: monthly.url,
-          notes: `PS Plus 会免 ${monthly.month}`,
-          soldDate: "",
-          soldPrice: 0,
-          soldCurrency: "CNY",
-        }));
+        .map(
+          (title): GameRecord => ({
+            id: crypto.randomUUID(),
+            platform: "PlayStation",
+            title,
+            price: 0,
+            currency: "CNY",
+            purchaseDate: new Date().toISOString().slice(0, 10),
+            region: "其他",
+            format: "数字版",
+            seller: "PlayStation Plus",
+            coverUrl: "",
+            officialUrl: monthly.url,
+            notes: `PS Plus 会免 ${monthly.month}`,
+            soldDate: "",
+            soldPrice: 0,
+            soldCurrency: "CNY",
+          }),
+        );
       if (!additions.length) break;
       try {
         await writeLedgerToSqlite(

@@ -28,7 +28,13 @@ type NavItem = {
   visible?: boolean;
 };
 type NavIconName =
-  "overview" | "switch" | "playstation" | "catalog" | "membership" | "history" | "settings";
+  | "overview"
+  | "switch"
+  | "playstation"
+  | "catalog"
+  | "membership"
+  | "history"
+  | "settings";
 type NavGroup = {
   id: string;
   label: string;

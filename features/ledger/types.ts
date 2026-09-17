@@ -98,7 +98,12 @@ export type NintendoCoverResult = {
   price: number | null;
   currency: string | null;
   source:
-    "mainland" | "hong-kong" | "algolia" | "page" | "playstation-hong-kong" | "playstation-page";
+    | "mainland"
+    | "hong-kong"
+    | "algolia"
+    | "page"
+    | "playstation-hong-kong"
+    | "playstation-page";
 };
 
 export type LedgerDocument = {

@@ -161,7 +161,8 @@ export function ensurePlayGameEntityBinding(
     } catch (error) {
       const concurrentStrongEntity = strongKey
         ? (db.prepare("SELECT id FROM game_entities WHERE strong_key=?").get(strongKey) as
-            { id: string } | undefined)
+            | { id: string }
+            | undefined)
         : undefined;
       if (!concurrentStrongEntity?.id) throw error;
       entityId = concurrentStrongEntity.id;
@@ -232,14 +233,16 @@ export function ensurePlayGameEntityBinding(
 
 export function resolveGameEntityId(db: EntityDatabase, id: string) {
   const direct = db.prepare("SELECT id FROM game_entities WHERE id=?").get(id) as
-    { id: string } | undefined;
+    | { id: string }
+    | undefined;
   if (direct?.id) return direct.id;
   const binding = db
     .prepare("SELECT entity_id FROM source_bindings WHERE play_game_id=?")
     .get(id) as { entity_id: string } | undefined;
   if (binding?.entity_id) return binding.entity_id;
   const alias = db.prepare("SELECT entity_id FROM game_entity_aliases WHERE alias_id=?").get(id) as
-    { entity_id: string } | undefined;
+    | { entity_id: string }
+    | undefined;
   return alias?.entity_id || null;
 }
 

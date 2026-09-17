@@ -30,7 +30,8 @@ export async function importMoonSnapshot(input: MoonSnapshot): Promise<MoonImpor
           "SELECT last_fetched_at,payload_sha256 FROM moon_connector_accounts WHERE account_scope=?",
         )
         .get(snapshot.accountScope) as
-        { last_fetched_at: string; payload_sha256: string } | undefined;
+        | { last_fetched_at: string; payload_sha256: string }
+        | undefined;
       if (previous && snapshot.fetchedAt <= previous.last_fetched_at) {
         if (snapshot.fetchedAt === previous.last_fetched_at && hash !== previous.payload_sha256)
           throw new MoonSnapshotError("snapshot_revision_conflict");
@@ -196,7 +197,8 @@ function upsertMoonGame(
     WHERE account_scope=? AND device_id=? AND external_id=?`,
     )
     .get(snapshot.accountScope, report.deviceId, game.externalId) as
-    { play_game_id: string; metadata_fetched_at: string } | undefined;
+    | { play_game_id: string; metadata_fetched_at: string }
+    | undefined;
   const id = previous?.play_game_id || randomUUID();
   if (!previous) {
     const externalId = `moon:${digest([snapshot.accountScope, report.deviceId, game.externalId])}`;

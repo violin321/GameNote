@@ -123,11 +123,11 @@ function safeStatus(status: number) {
 export function assertStoreCallback(value: unknown): value is { callbackUrl: string } {
   return Boolean(
     value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    typeof (value as { callbackUrl?: unknown }).callbackUrl === "string" &&
-    (value as { callbackUrl: string }).callbackUrl.length > 0 &&
-    (value as { callbackUrl: string }).callbackUrl.length <= 4096,
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 1 &&
+      typeof (value as { callbackUrl?: unknown }).callbackUrl === "string" &&
+      (value as { callbackUrl: string }).callbackUrl.length > 0 &&
+      (value as { callbackUrl: string }).callbackUrl.length <= 4096,
   );
 }

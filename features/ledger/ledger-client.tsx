@@ -669,7 +669,8 @@ export default function LedgerClient({
       try {
         const response = await fetch("/api/exchange-rates", { cache: "no-store" });
         const payload = (await response.json().catch(() => ({}))) as
-          ExchangeRatePayload | { error?: string };
+          | ExchangeRatePayload
+          | { error?: string };
 
         if (!response.ok || !isExchangeRatePayload(payload)) {
           throw new Error("error" in payload && payload.error ? payload.error : "无法更新汇率");

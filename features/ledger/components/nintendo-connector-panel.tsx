@@ -256,7 +256,7 @@ export function NintendoConnectorPanel() {
   const consentRequired = Boolean(status && needsProviderConsent(status));
   const canAuthorize = Boolean(
     status?.provider.enabled &&
-    (status.provider.mode !== "fancy" || status.provider.receipt.status === "valid"),
+      (status.provider.mode !== "fancy" || status.provider.receipt.status === "valid"),
   );
   return (
     <div className="nintendo-connector settings-wide" aria-busy={loading || busy}>

@@ -60,7 +60,8 @@ export class MoonScheduleStore {
       db.exec("PRAGMA busy_timeout = 5000");
       return (
         (db.prepare("SELECT * FROM moon_scheduler WHERE singleton = 1").get() as
-          SchedulerRow | undefined) ?? null
+          | SchedulerRow
+          | undefined) ?? null
       );
     } finally {
       db.close();

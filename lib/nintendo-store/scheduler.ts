@@ -70,7 +70,8 @@ export class NintendoStoreScheduleStore {
       db.exec("PRAGMA busy_timeout = 5000");
       return (
         (db.prepare("SELECT * FROM nintendo_store_scheduler WHERE singleton = 1").get() as
-          SchedulerRow | undefined) ?? null
+          | SchedulerRow
+          | undefined) ?? null
       );
     } finally {
       db.close();

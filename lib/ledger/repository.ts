@@ -323,7 +323,8 @@ export async function readAppSettings(): Promise<AppSettings> {
   const { db } = await openLedgerDatabase();
   try {
     const row = db.prepare("SELECT value FROM app_settings WHERE id = ?").get("default") as
-      { value?: unknown } | undefined;
+      | { value?: unknown }
+      | undefined;
     return normalizeAppSettings(parseStoredJson(row?.value, {}));
   } finally {
     db.close();
