@@ -2,7 +2,11 @@
 
 GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支持 Nintendo Switch、PlayStation、PS Plus 游戏目录、会员记录、价格统计、JSON 备份和 AI 订单截图识别。
 
-应用采用 Next.js、React、TypeScript 与 SQLite 构建，默认通过 Docker Compose 部署。游客可以只读浏览收藏，管理员登录后才能修改数据和使用管理工具。
+本工作树还包含 NS2 历史游玩、Moon 日报、Nintendo Store 累计快照与收藏关联等本地扩展。下文的 `dingding229/gamenote:latest` 是**上游镜像**，不会自动包含这些尚未合并的功能；不要将本地 NS2 数据库挂载给上游镜像试运行。扩展版应从本工作树构建专用镜像，并固定经验证的版本/提交后再部署。
+
+个人版源码整理与 Docker Hub 发版条件见 [个人维护与发布手册](docs/personal-release.md)。当前上游未提供可识别的 LICENSE，公开发布衍生镜像前需确认再分发许可。
+
+应用采用 Next.js、React、TypeScript 与 SQLite 构建，可通过 Docker Compose 部署。个人版在配置发布凭据并确认许可后，可由 GitHub Actions 构建并发布到 Docker Hub；当前未配置发布凭据。游客可以只读浏览收藏，管理员登录后才能修改数据和使用管理工具。
 
 ## 主要功能
 
@@ -10,10 +14,9 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 
 - Nintendo Switch 与 PlayStation 独立游戏库。
 - 记录游戏名称、平台、实体/数字版、版本地区、买入价格、币种、购买日期、渠道和备注。
-- 游戏可记录卖出日期、价格和币种；已卖出的记录会变灰并排列在当前收藏之后。
-- PS Plus 会员到期后，自动加入的会免记录会冻结、变灰并排列到当前收藏之后；续费生效后自动恢复。
+- 实体游戏可记录卖出日期、价格和币种。
 - 封面网格和紧凑列表两种展示方式。
-- 支持名称搜索、地区版本、数字版/实体版筛选、排序、平台统计和人民币汇率折算。
+- 支持名称搜索、排序、平台统计和人民币汇率折算。
 - 繁体中文标题自动规范为简体中文，搜索时进行繁简归一化。
 
 ### 官方数据查询
@@ -27,9 +30,8 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 
 - PS Plus 游戏库独立页面，展示港区升级与高级会员目录、中文名、封面和支持平台。
 - PS Plus 目录使用 SQLite 缓存，默认每 12 小时后台刷新一次；管理员可以手动刷新。
-- PlayStation Plus 和 Nintendo Switch Online 按起止时间记录会员周期、购买价格及币种，过期记录会保留。
-- 可从 PlayStation Blog 识别本月 PS Plus 会免阵容，再按准确游戏名从港区 PlayStation Store 获取官方页面与封面，去重后加入收藏。
-- 历史会免补录会根据已保存的 PS Plus 会员时间段列出过往月份，预览该月阵容后可勾选实际领取过的游戏批量入库。
+- 可记录 PlayStation Plus 和 Nintendo Switch Online 的启用状态及到期日期。
+- 可从 PlayStation Blog 获取本月 PS Plus 会免游戏，去重后自动加入收藏。
 
 ### AI 购买截图识别
 
@@ -44,7 +46,7 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 
 - 设置网站标题、头像和满足可读性要求的主题色。
 - 选择侧边栏需要展示的 Nintendo Switch、PlayStation、PS Plus 游戏库和会员工具。
-- JSON 导入和导出统一位于“设置 → 数据备份”，备份包含购买记录和非敏感应用设置。
+- 收藏 JSON 导入和导出统一位于设置页；完整 NS2 库需要 SQLite 备份。
 - JSON 文件最大 5MB，最多包含 2,000 条记录。
 - 收藏分享图支持价格、购买日期、卖出信息和备注；单张图最多展示前 160 条记录，并限制封面加载并发数。
 
@@ -54,9 +56,7 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 - 密码使用异步 scrypt 哈希，不保存明文。
 - 登录失败按客户端地址与账号限流。
 - 会话 Cookie 使用 HttpOnly、SameSite=Strict 和签名 JWT。
-- 游戏和会员记录删除前均使用站内确认对话框进行二次确认。
-- 修改密码或生成临时密码会立即撤销全部旧登录会话。
-- 忘记密码时可在登录窗口生成 `data/password` 文件；使用文件中的临时密码登录后必须设置新密码。
+- 修改密码会立即撤销全部旧登录会话，并要求重新登录。
 - 收藏保存使用 `updatedAt` 乐观锁，避免多个页面或 PS Plus 同步相互覆盖数据。
 - 分享图封面代理仅允许已登录管理员访问，只接受通过文件签名校验的 JPEG、PNG、WebP 和 AVIF。
 
@@ -110,25 +110,25 @@ services:
     environment:
       PS_PLUS_CATALOG_REFRESH_HOURS: ${PS_PLUS_CATALOG_REFRESH_HOURS:-12}
       JWT_SECRET: ${JWT_SECRET:?请复制 .env.example 为 .env，并配置 JWT_SECRET}
-      APP_DATABASE_FILE: "/data/records.sqlite"
+      APP_DATABASE_FILE: "/data/ns2.sqlite"
     volumes:
       - ./data:/data
 ```
 
 | 环境变量                        | 是否必需 | 默认值                        | 说明                                                           |
 | ------------------------------- | :------: | ----------------------------- | -------------------------------------------------------------- |
-| `GAMENOTE_IMAGE`                |    否    | `dingding229/gamenote:latest` | Docker Hub 镜像。                                              |
+| `GAMENOTE_IMAGE`                |    否    | `dingding229/gamenote:latest` | Docker Hub 镜像；可固定到版本或 `sha-xxxxxxx` 标签。           |
 | `JWT_SECRET`                    |    是    | 无                            | JWT 会话签名密钥，生产环境至少 32 字节。修改后现有会话会失效。 |
-| `APP_DATABASE_FILE`             |    否    | `/data/records.sqlite`        | SQLite 数据库文件路径，Docker 配置已经写入。                   |
+| `APP_DATABASE_FILE`             |    否    | `/data/ns2.sqlite`            | SQLite 数据库文件路径，Docker 配置已经写入。                   |
 | `PS_PLUS_CATALOG_REFRESH_HOURS` |    否    | `12`                          | PS Plus 游戏目录缓存刷新间隔，单位为小时。                     |
 
-以下配置在管理员设置页面中维护：
+以下内容不再通过环境变量维护：
 
 - AI API 地址、API Key 和视觉模型。
 - 需要展示或统计的游戏平台与工具。
 - PS Plus 和 Nintendo Switch Online 会员状态。
 
-这些配置保存在 SQLite 中。
+它们均由管理员在应用设置中维护，并保存在 SQLite 中。
 
 ## Docker Run 镜像安装
 
@@ -147,27 +147,13 @@ docker run -d \
   --init \
   -p 3000:3000 \
   --env-file .env \
-  -e APP_DATABASE_FILE=/data/records.sqlite \
+  -e APP_DATABASE_FILE=/data/ns2.sqlite \
   -e PS_PLUS_CATALOG_REFRESH_HOURS=12 \
   -v "$(pwd)/data:/data" \
   dingding229/gamenote:latest
 ```
 
 容器使用宿主机当前目录下的 `data` 文件夹持久化 SQLite 数据。删除或重建容器不会删除该文件夹。
-
-## 忘记管理员密码
-
-打开登录窗口，填写管理员账号并点击“重置密码”。确认后，程序会在 SQLite 数据库所在目录生成 `password` 文件。
-
-```bash
-# Docker Compose
-docker compose exec gamenote cat /data/password
-
-# Docker Run
-docker exec gamenote cat /data/password
-```
-
-使用临时密码登录后，程序会要求立即设置新密码。设置成功后 `password` 文件自动删除，所有旧登录会话失效。
 
 ## 更新、日志与停止
 
@@ -205,7 +191,7 @@ docker run -d \
   --init \
   -p 3000:3000 \
   --env-file .env \
-  -e APP_DATABASE_FILE=/data/records.sqlite \
+  -e APP_DATABASE_FILE=/data/ns2.sqlite \
   -e PS_PLUS_CATALOG_REFRESH_HOURS=12 \
   -v "$(pwd)/data:/data" \
   dingding229/gamenote:latest
@@ -223,15 +209,15 @@ docker stop gamenote
 默认 SQLite 文件位于宿主机：
 
 ```text
-./data/records.sqlite
+./data/ns2.sqlite
 ```
 
-推荐同时采用两种备份：
+两种导出范围不同：
 
-1. 定期在“设置 → 数据备份”中导出 JSON。
-2. 停止容器后复制 `data/records.sqlite`。
+1. “设置 → 数据备份”的 JSON **仅包含收藏账本**，不能恢复历史游玩、日报、快照或关联决策。
+2. 完整 NS2 业务数据请按 [NS2 备份与恢复手册](docs/ns2-backup.md) 使用在线 SQLite 备份、完整性检查及隔离恢复演练。Moon/Store 的加密授权状态和服务密钥在数据库外，应独立安全备份。
 
-JSON 备份可以在设置页面直接导入。SQLite 备份应在容器停止后替换，避免复制写入中的数据库文件。
+不要在线直接复制 SQLite 主文件（可能漏掉 WAL 中已提交的数据）。JSON 仍可在设置页面导入收藏；SQLite 正式回滚需停写、验证目标和凭据目录后按手册操作。
 
 ## 本地开发与质量检查
 
@@ -242,7 +228,7 @@ npm ci
 npx next dev -p 3017
 ```
 
-访问 `http://localhost:3017`。开发数据默认写入 `data/records.sqlite`。
+访问 `http://localhost:3017`。开发数据默认写入 `data/ns2.sqlite`。
 
 ```bash
 npm run format:check  # Prettier 格式检查
@@ -295,7 +281,7 @@ data/                           本地 SQLite 数据，不纳入版本控制
 ## 安全与部署建议
 
 - 为每个部署生成不同的 `JWT_SECRET`，不要使用示例文本或短密码。
-- 不要提交 `.env`、`data/records.sqlite` 或 JSON 备份。
+- 不要提交 `.env`、`data/ns2.sqlite` 或 JSON 备份。
 - 公网部署应使用 HTTPS 反向代理，并在代理层增加速率限制和安全响应头。
 - 登录限流保存在当前 Node 进程内；多实例部署时应改用 Redis 等共享限流存储。
 - AI API Key 保存在本地 SQLite，请限制数据库文件权限并妥善备份。

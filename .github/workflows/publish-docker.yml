@@ -14,10 +14,13 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   publish:
     name: Build and publish
+    needs: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -55,8 +58,10 @@ jobs:
         with:
           images: ${{ vars.DOCKERHUB_USERNAME }}/gamenote
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
             type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v7
@@ -72,3 +77,5 @@ jobs:
           cache-to: type=gha,mode=max,scope=gamenote
           provenance: true
           sbom: true
+          build-args: |
+            OCI_REVISION=${{ github.sha }}
