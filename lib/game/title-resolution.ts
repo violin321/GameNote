@@ -22,11 +22,6 @@ export type ResolvedGameTitle = {
 const hanPattern = /[\u3400-\u9fff]/u;
 const titleCache = new Map<string, { expiresAt: number; value: ResolvedGameTitle[] }>();
 const titleCacheTtl = 24 * 60 * 60 * 1000;
-const knownChineseTitles = new Map([
-  // The Chinese storefront keeps this product title in English; use its established Chinese
-  // display name in the local library.
-  ["big walk", "大步走"],
-]);
 
 export async function resolveGameTitles(query: string): Promise<ResolvedGameTitle[]> {
   const trimmed = query.trim();
@@ -35,10 +30,6 @@ export async function resolveGameTitles(query: string): Promise<ResolvedGameTitl
   }
 
   const cacheKey = normalizeComparableTitle(trimmed);
-  const knownChineseTitle = knownChineseTitles.get(cacheKey);
-  if (knownChineseTitle) {
-    return [{ englishTitle: trimmed, chineseTitle: knownChineseTitle }];
-  }
   const cached = titleCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
@@ -128,10 +119,7 @@ export async function resolveGameTitles(query: string): Promise<ResolvedGameTitl
       .filter((title) => title.englishTitle || title.chineseTitle)
       .slice(0, 8);
 
-    const translated = resolved.some((title) => title.chineseTitle)
-      ? []
-      : await resolveTranslatedTitles(trimmed);
-    const value = resolved.length ? [...resolved, ...translated] : translated;
+    const value = resolved.length ? resolved : await resolveTranslatedTitles(trimmed);
     cacheResolvedTitles(cacheKey, value);
     return value;
   } catch {
@@ -180,7 +168,7 @@ function buildTitleLookupCandidates(value: string) {
   const candidates = new Set([cleaned]);
   const baseTitle = cleaned
     .replace(
-      /(?:\s*[:\-]​?\s*|\s+)(?:digital\s+)?(?:director['’]s\s+cut|deluxe(?:\s+edition)?|ultimate(?:\s+edition)?|complete(?:\s+edition)?|definitive(?:\s+edition)?|gold(?:\s+edition)?|standard(?:\s+edition)?|collector['’]s(?:\s+edition)?|game\s+of\s+the\s+year(?:\s+edition)?|goty(?:\s+edition)?|enhanced(?:\s+edition)?|anniversary(?:\s+edition)?|royal(?:\s+edition)?|premium(?:\s+edition)?|reloaded(?:\s+edition)?|remastered|remake)\s*$/iu,
+      /(?:\s*[:\-]​?\s*|\s+)(?:digital\s+)?(?:director['’]s\s+cut|deluxe(?:\s+edition)?|ultimate(?:\s+edition)?|complete(?:\s+edition)?|definitive(?:\s+edition)?|gold(?:\s+edition)?|standard(?:\s+edition)?|collector['’]s(?:\s+edition)?|game\s+of\s+the\s+year(?:\s+edition)?|goty(?:\s+edition)?|enhanced(?:\s+edition)?|anniversary(?:\s+edition)?|royal(?:\s+edition)?|premium(?:\s+edition)?|remastered|remake)\s*$/iu,
       "",
     )
     .trim();
@@ -230,7 +218,6 @@ function localizeEditionSuffix(value: string) {
     [/^anniversary(?: edition)?$/i, "纪念版"],
     [/^royal(?: edition)?$/i, "皇家版"],
     [/^premium(?: edition)?$/i, "高级版"],
-    [/^reloaded(?: edition)?$/i, "重装上阵版"],
     [/^(?:remastered|remake)$/i, "重制版"],
     [/^nintendo switch 2 edition(?: upgrade pack)?$/i, "Nintendo Switch 2版"],
     [/^nintendo switch 2 edition upgrade pack$/i, "Nintendo Switch 2版升级包"],

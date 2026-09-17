@@ -2,8 +2,6 @@ import type { Currency, FormState, GameFormat, GamePlatform, Region } from "./ty
 
 export const storageKey = "switch-cartridge-ledger";
 export const exchangeCacheKey = "switch-ledger-exchange-rates-v1";
-export const recordDisplayModeStorageKey = "gamenote-record-display-mode";
-export const catalogDisplayModeStorageKey = "gamenote-catalog-display-mode";
 export const currencies = [
   "CNY",
   "JPY",

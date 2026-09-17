@@ -1,0 +1,25 @@
+{
+  "schema": "gamenote.nintendo.readonly.v1",
+  "capturedAt": "2026-08-24T15:00:00.000Z",
+  "source": {
+    "provider": "Nintendo Switch Online",
+    "coralVersion": "3.4.0",
+    "readOnly": true
+  },
+  "currentUser": {
+    "playLog": [
+      {
+        "name": "Fixture Game",
+        "imageUrl": "https://example.invalid/game.png",
+        "officialUrl": "https://ec.nintendo.com/apps/fixture-game",
+        "totalPlayTime": 120,
+        "firstPlayedAt": "2026-08-23T15:46:40.000Z"
+      }
+    ]
+  },
+  "userShow": {
+    "playLog": []
+  },
+  "friends": [],
+  "presence": []
+}

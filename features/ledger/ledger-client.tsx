@@ -1,26 +1,37 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { normalizeChineseSearchText } from "@/lib/game/title-normalization";
 import { ledgerLimits } from "@/lib/ledger/limits";
 import { defaultThemeColor, themeColorContent } from "@/lib/ui/theme-color";
-import { appVersion } from "@/lib/version";
-import { isFrozenPsPlusRecord } from "@/lib/game/ps-plus-record";
-import { AppToolbar, Stat } from "./components/app-toolbar";
-import { ConfirmationDialog } from "./components/confirmation-dialog";
+import {
+  shellAuthChangedEvent,
+  shellAuthRequestedEvent,
+  shellSettingsChangedEvent,
+} from "@/features/app-shell/app-shell";
+import { Stat } from "./components/app-toolbar";
+import type { DashboardStats } from "@/lib/play-history/types";
 import {
   catalogPageSize,
-  catalogDisplayModeStorageKey,
   currencies,
   emptyForm,
   exchangeCacheKey,
   gamePlatforms,
   regions,
-  recordDisplayModeStorageKey,
 } from "./constants";
 import { MembershipPage, SettingsPage } from "./components/settings-pages";
-import { MobileAccountMenu } from "./components/mobile-account-menu";
 import { PsPlusCatalogPage } from "./components/ps-plus-catalog-page";
+import { AppleSelect } from "@/features/ui/apple-select";
 import { useDialogAccessibility } from "./hooks/use-dialog-accessibility";
 import { createFormFromRecognizedGame } from "./recognized-game";
 import {
@@ -34,22 +45,21 @@ import {
 import type {
   AccessStatus,
   ActiveView,
-  Currency,
   ExchangeRatePayload,
   FormState,
   GameFormat,
   GamePlatform,
   GameRecord,
+  LibraryPlayGame,
   NintendoCoverResult,
   PsPlusCatalog,
+  PurchasePlaySummary,
   RecognizedGame,
   RecordDisplayMode,
   Region,
   SaveStatus,
   SettingsState,
   ShareOptions,
-  ToolbarGroup,
-  VersionInfo,
 } from "./types";
 import {
   convertToCny,
@@ -64,7 +74,6 @@ import {
   formatMoney,
   formatOptionsForPlatform,
   isPhysicalFormat,
-  isSafeOfficialUrl,
   lookupPriceLabel,
   maxShareImageRecords,
   normalizeFormatForPlatform,
@@ -73,32 +82,68 @@ import {
   officialUrlPlaceholder,
   platformFromPath,
   platformLabel,
-  saveStatusLabel,
   setPlatformUrl,
-  setViewUrl,
   sumRecordsInCny,
   textMatchesQuery,
   todayString,
 } from "./utils";
 
+type LibrarySort = "date" | "price" | "title";
+
+const librarySortOptions: Array<{
+  value: LibrarySort;
+  label: string;
+  description: string;
+  icon: "clock" | "price" | "title";
+}> = [
+  {
+    value: "date",
+    label: "最近活动",
+    description: "历史按最近游玩，收藏按购买日期",
+    icon: "clock",
+  },
+  {
+    value: "title",
+    label: "游戏名称",
+    description: "按标题顺序排列",
+    icon: "title",
+  },
+  {
+    value: "price",
+    label: "购买价格",
+    description: "按收藏记录的价格排列",
+    icon: "price",
+  },
+];
+
 export default function LedgerClient({
   initialPlatform,
   initialView = "records",
+  beforeContent,
 }: {
   initialPlatform: GamePlatform;
   initialView?: ActiveView;
+  beforeContent?: ReactNode;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveRequestRef = useRef(0);
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const ledgerUpdatedAtRef = useRef("");
   const coverLookupRequestRef = useRef(0);
+  const sortMenuRef = useRef<HTMLDivElement>(null);
   const [records, setRecords] = useState<GameRecord[]>([]);
+  const [libraryPlayGames, setLibraryPlayGames] = useState<LibraryPlayGame[]>([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [playSummaries, setPlaySummaries] = useState<Record<string, PurchasePlaySummary>>({});
   const [form, setForm] = useState<FormState>(emptyForm);
-  const [saleEnabled, setSaleEnabled] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [historyGameId, setHistoryGameId] = useState<string | null>(null);
+  const [historySaveError, setHistorySaveError] = useState("");
+  const [historyRegionConfirmed, setHistoryRegionConfirmed] = useState(true);
+  const [historyFormatConfirmed, setHistoryFormatConfirmed] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>(initialView);
   const [recordDisplayMode, setRecordDisplayMode] = useState<RecordDisplayMode>("grid");
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareOptions, setShareOptions] = useState<ShareOptions>({
     showPrice: false,
@@ -106,8 +151,6 @@ export default function LedgerClient({
     showDate: false,
     showNotes: false,
   });
-  const [shareRecordIds, setShareRecordIds] = useState<string[]>([]);
-  const [sharePlatformFilter, setSharePlatformFilter] = useState<"all" | GamePlatform>("all");
   const [shareImageUrl, setShareImageUrl] = useState("");
   const [shareStatus, setShareStatus] = useState<"idle" | "generating" | "error">("idle");
   const purchaseImageInputRef = useRef<HTMLInputElement>(null);
@@ -121,23 +164,18 @@ export default function LedgerClient({
   const [activePlatform, setActivePlatform] = useState<GamePlatform>(initialPlatform);
   const [storageReady, setStorageReady] = useState(false);
   const [recordsDirty, setRecordsDirty] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [, setSaveStatus] = useState<SaveStatus>("idle");
   const [storageError, setStorageError] = useState("");
   const [accessStatus, setAccessStatus] = useState<AccessStatus>("checking");
   const [authPanelOpen, setAuthPanelOpen] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [username, setUsername] = useState("");
-  const [currentUsername, setCurrentUsername] = useState("");
+  const [, setCurrentUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
-  const [forcedNewPassword, setForcedNewPassword] = useState("");
-  const [forcedConfirmPassword, setForcedConfirmPassword] = useState("");
-  const [passwordNotice, setPasswordNotice] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"date" | "price" | "title">("date");
-  const [regionFilter, setRegionFilter] = useState<Region | "all">("all");
-  const [formatFilter, setFormatFilter] = useState<GameFormat | "all">("all");
+  const [sortBy, setSortBy] = useState<LibrarySort>("date");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [coverResults, setCoverResults] = useState<NintendoCoverResult[]>([]);
   const [coverStatus, setCoverStatus] = useState<"idle" | "searching">("idle");
   const [coverError, setCoverError] = useState("");
@@ -148,8 +186,8 @@ export default function LedgerClient({
     avatarUrl: "",
     themeColor: defaultThemeColor,
     showNintendoSwitch: true,
-    showPlayStation: true,
-    showPsPlusCatalog: true,
+    showPlayStation: false,
+    showPsPlusCatalog: false,
     showMemberships: true,
     aiBaseUrl: "https://api.openai.com/v1",
     aiModel: "gpt-4.1-mini",
@@ -162,17 +200,9 @@ export default function LedgerClient({
     psPlusAutoAddMonthly: true,
     nsOnlineEnabled: false,
     nsOnlineExpiresAt: "",
-    membershipPeriods: [],
   });
   const [settingsReady, setSettingsReady] = useState(false);
   const [settingsStatus, setSettingsStatus] = useState("");
-  const [versionInfo, setVersionInfo] = useState<VersionInfo>({
-    currentVersion: appVersion,
-    latestVersion: "",
-    updateAvailable: false,
-    checkedAt: "",
-  });
-  const [versionChecking, setVersionChecking] = useState(false);
   const [aiActionStatus, setAiActionStatus] = useState("");
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [psPlusStatus, setPsPlusStatus] = useState("");
@@ -182,14 +212,30 @@ export default function LedgerClient({
   const [catalogError, setCatalogError] = useState("");
   const [catalogVisibleCount, setCatalogVisibleCount] = useState(catalogPageSize);
   const [catalogDisplayMode, setCatalogDisplayMode] = useState<RecordDisplayMode>("grid");
-  const [pendingDeleteRecord, setPendingDeleteRecord] = useState<GameRecord | null>(null);
-  const [pendingPasswordRecovery, setPendingPasswordRecovery] = useState(false);
   const shareDialogRef = useDialogAccessibility(shareOpen, closeSharePanel);
   const recognizeDialogRef = useDialogAccessibility(recognizeOpen, () => setRecognizeOpen(false));
-  const authDialogRef = useDialogAccessibility<HTMLFormElement>(
-    authPanelOpen && !pendingPasswordRecovery,
-    requestCloseAuthPanel,
+  const authDialogRef = useDialogAccessibility<HTMLFormElement>(authPanelOpen, () =>
+    setAuthPanelOpen(false),
   );
+
+  useEffect(() => {
+    if (!sortMenuOpen) return;
+
+    function closeFromOutside(event: PointerEvent) {
+      if (!sortMenuRef.current?.contains(event.target as Node)) setSortMenuOpen(false);
+    }
+
+    function closeFromKeyboard(event: KeyboardEvent) {
+      if (event.key === "Escape") setSortMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeFromOutside);
+    document.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeFromOutside);
+      document.removeEventListener("keydown", closeFromKeyboard);
+    };
+  }, [sortMenuOpen]);
 
   const loadLedger = useCallback(
     async (authenticated: boolean) => {
@@ -202,6 +248,15 @@ export default function LedgerClient({
       try {
         const serverLedger = await fetchLedgerFromServer();
         const serverRecords = serverLedger.records;
+        setPlaySummaries(
+          Object.fromEntries(
+            (serverLedger.playSummaries || []).map((summary) => [
+              summary.purchaseRecordId,
+              summary,
+            ]),
+          ),
+        );
+        setLibraryPlayGames(serverLedger.libraryPlayGames || []);
         ledgerUpdatedAtRef.current = serverLedger.updatedAt;
         const legacyRecords = authenticated ? loadLegacyLocalRecords() : [];
         const nextRecords =
@@ -216,11 +271,15 @@ export default function LedgerClient({
           setSaveStatus("saving");
         }
         setForm(createEmptyForm(initialPlatform));
-        setSaleEnabled(false);
+        setHistoryGameId(null);
+        setHistorySaveError("");
+        setHistoryRegionConfirmed(true);
+        setHistoryFormatConfirmed(true);
         setActiveView(initialView);
         setStorageReady(true);
       } catch (error) {
         setRecords([]);
+        setLibraryPlayGames([]);
         setRecordsDirty(false);
         setStorageError(error instanceof Error ? error.message : "无法读取服务端记录");
         setStorageReady(false);
@@ -235,46 +294,15 @@ export default function LedgerClient({
       const payload = (await response.json()) as {
         authenticated?: boolean;
         registrationOpen?: boolean;
-        passwordChangeRequired?: boolean;
         username?: string | null;
       };
-      const requiresPasswordChange = Boolean(payload.passwordChangeRequired);
       setRegistrationOpen(Boolean(payload.registrationOpen));
-      setPasswordChangeRequired(requiresPasswordChange);
       setCurrentUsername(payload.username || "");
-      if (requiresPasswordChange) setAuthPanelOpen(true);
-      await loadLedger(Boolean(payload.authenticated) && !requiresPasswordChange);
+      await loadLedger(Boolean(payload.authenticated));
     } catch {
       await loadLedger(false);
     }
   }, [loadLedger]);
-
-  const checkVersion = useCallback(async (force = false) => {
-    setVersionChecking(true);
-    try {
-      const response = await fetch(`/api/version${force ? "?refresh=1" : ""}`, {
-        cache: "no-store",
-      });
-      const payload = (await response.json().catch(() => ({}))) as Partial<VersionInfo>;
-      if (!response.ok || typeof payload.currentVersion !== "string")
-        throw new Error(payload.error || "无法检查更新");
-      setVersionInfo({
-        currentVersion: payload.currentVersion,
-        latestVersion: typeof payload.latestVersion === "string" ? payload.latestVersion : "",
-        updateAvailable: payload.updateAvailable === true,
-        checkedAt: typeof payload.checkedAt === "string" ? payload.checkedAt : "",
-        stale: payload.stale === true,
-        error: typeof payload.error === "string" ? payload.error : undefined,
-      });
-    } catch (error) {
-      setVersionInfo((current) => ({
-        ...current,
-        error: error instanceof Error ? error.message : "无法检查更新",
-      }));
-    } finally {
-      setVersionChecking(false);
-    }
-  }, []);
 
   const applyPlatformPage = useCallback(
     (platform: GamePlatform, urlMode: "push" | "replace" | false) => {
@@ -284,15 +312,16 @@ export default function LedgerClient({
 
       setActivePlatform(platform);
       setQuery("");
-      setRegionFilter("all");
-      setFormatFilter("all");
       setCoverResults([]);
       setCoverError("");
 
       if (editingId || activeView === "form") {
         setEditingId(null);
+        setHistoryGameId(null);
+        setHistorySaveError("");
+        setHistoryRegionConfirmed(true);
+        setHistoryFormatConfirmed(true);
         setForm(createEmptyForm(platform));
-        setSaleEnabled(false);
         setActiveView("records");
       }
     },
@@ -300,41 +329,25 @@ export default function LedgerClient({
   );
 
   useEffect(() => {
+    const openAuthPanel = () => setAuthPanelOpen(true);
     const frame = window.requestAnimationFrame(() => {
       const storedThemeColor = window.localStorage.getItem("gamenote-theme-color");
       if (storedThemeColor && /^#[0-9a-f]{6}$/i.test(storedThemeColor)) {
         document.documentElement.style.setProperty("--color-primary", storedThemeColor);
       }
       checkAccess();
+      if (new URLSearchParams(window.location.search).get("auth") === "login")
+        setAuthPanelOpen(true);
     });
 
-    return () => window.cancelAnimationFrame(frame);
+    window.addEventListener(shellAuthChangedEvent, checkAccess);
+    window.addEventListener(shellAuthRequestedEvent, openAuthPanel);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener(shellAuthChangedEvent, checkAccess);
+      window.removeEventListener(shellAuthRequestedEvent, openAuthPanel);
+    };
   }, [checkAccess]);
-
-  useEffect(() => {
-    void checkVersion();
-  }, [checkVersion]);
-
-  useEffect(() => {
-    const storedRecordMode = window.localStorage.getItem(recordDisplayModeStorageKey);
-    if (storedRecordMode === "grid" || storedRecordMode === "list") {
-      setRecordDisplayMode(storedRecordMode);
-    }
-    const storedCatalogMode = window.localStorage.getItem(catalogDisplayModeStorageKey);
-    if (storedCatalogMode === "grid" || storedCatalogMode === "list") {
-      setCatalogDisplayMode(storedCatalogMode);
-    }
-  }, []);
-
-  function changeRecordDisplayMode(mode: RecordDisplayMode) {
-    setRecordDisplayMode(mode);
-    window.localStorage.setItem(recordDisplayModeStorageKey, mode);
-  }
-
-  function changeCatalogDisplayMode(mode: RecordDisplayMode) {
-    setCatalogDisplayMode(mode);
-    window.localStorage.setItem(catalogDisplayModeStorageKey, mode);
-  }
 
   useEffect(() => {
     if (accessStatus === "checking") return;
@@ -377,7 +390,8 @@ export default function LedgerClient({
           : !settings.showPlayStation
         : false;
     const activeToolHidden =
-      (activeView === "ps-plus-catalog" && !settings.showPsPlusCatalog) ||
+      (activeView === "ps-plus-catalog" &&
+        (!settings.showPlayStation || !settings.showPsPlusCatalog)) ||
       (activeView === "memberships" && !settings.showMemberships);
 
     if (activeLibraryHidden || activeToolHidden) {
@@ -416,7 +430,8 @@ export default function LedgerClient({
       updateThemeColor(payload.themeColor);
       document.title = payload.siteTitle;
       setSettingsStatus("已保存");
-      if (payload.psPlusEnabled && payload.psPlusAutoAddMonthly)
+      window.dispatchEvent(new Event(shellSettingsChangedEvent));
+      if (payload.showPlayStation && payload.psPlusEnabled && payload.psPlusAutoAddMonthly)
         window.setTimeout(() => syncPsPlusGames(false), 0);
     } catch (error) {
       setSettingsStatus(error instanceof Error ? error.message : "保存失败");
@@ -478,27 +493,13 @@ export default function LedgerClient({
         const response = await fetch("/api/ps-plus", { method: "POST" });
         const payload = (await response.json().catch(() => ({}))) as {
           added?: number;
-          updated?: number;
-          removedDuplicates?: number;
           message?: string;
           error?: string;
         };
         if (!response.ok) throw new Error(payload.error || "同步失败");
-        if (
-          (payload.added || 0) > 0 ||
-          (payload.updated || 0) > 0 ||
-          (payload.removedDuplicates || 0) > 0
-        ) {
+        if ((payload.added || 0) > 0) {
           await loadLedger(true);
-          setPsPlusStatus(
-            [
-              payload.added ? `已自动入库 ${payload.added} 款会免游戏` : "",
-              payload.updated ? `已补全 ${payload.updated} 款已有会免信息` : "",
-              payload.removedDuplicates ? `已清理 ${payload.removedDuplicates} 条重复记录` : "",
-            ]
-              .filter(Boolean)
-              .join("，"),
-          );
+          setPsPlusStatus(`已自动入库 ${payload.added} 款会免游戏`);
         } else if (!silent) setPsPlusStatus(payload.message || "当月会免已同步");
       } catch (error) {
         if (!silent) setPsPlusStatus(error instanceof Error ? error.message : "同步失败");
@@ -508,9 +509,20 @@ export default function LedgerClient({
   );
 
   useEffect(() => {
-    if (accessStatus === "unlocked" && settings.psPlusEnabled && settings.psPlusAutoAddMonthly)
+    if (
+      accessStatus === "unlocked" &&
+      settings.showPlayStation &&
+      settings.psPlusEnabled &&
+      settings.psPlusAutoAddMonthly
+    )
       syncPsPlusGames(true);
-  }, [accessStatus, settings.psPlusAutoAddMonthly, settings.psPlusEnabled, syncPsPlusGames]);
+  }, [
+    accessStatus,
+    settings.psPlusAutoAddMonthly,
+    settings.psPlusEnabled,
+    settings.showPlayStation,
+    syncPsPlusGames,
+  ]);
 
   const loadPsPlusCatalog = useCallback(async (force = false) => {
     setCatalogStatus("loading");
@@ -624,6 +636,22 @@ export default function LedgerClient({
   }, [applyPlatformPage]);
 
   useEffect(() => {
+    if (accessStatus === "checking") return;
+    let cancelled = false;
+    fetch("/api/dashboard-stats", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!cancelled) setDashboardStats(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setDashboardStats(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessStatus, records]);
+
+  useEffect(() => {
     if (accessStatus === "checking") {
       return;
     }
@@ -641,8 +669,7 @@ export default function LedgerClient({
       try {
         const response = await fetch("/api/exchange-rates", { cache: "no-store" });
         const payload = (await response.json().catch(() => ({}))) as
-          | ExchangeRatePayload
-          | { error?: string };
+          ExchangeRatePayload | { error?: string };
 
         if (!response.ok || !isExchangeRatePayload(payload)) {
           throw new Error("error" in payload && payload.error ? payload.error : "无法更新汇率");
@@ -696,59 +723,24 @@ export default function LedgerClient({
     return () => window.clearTimeout(timeoutId);
   }, [accessStatus, records, recordsDirty, storageReady]);
 
-  function openAuthPanel() {
-    setForcedNewPassword("");
-    setForcedConfirmPassword("");
-    setPasswordError("");
-    setPasswordNotice("");
-    setAuthPanelOpen(true);
-  }
-
-  function requestCloseAuthPanel() {
-    if (!passwordChangeRequired) closeAuthPanel();
-  }
-
-  function closeAuthPanel() {
-    setAuthPanelOpen(false);
-    setForcedNewPassword("");
-    setForcedConfirmPassword("");
-    setPasswordError("");
-    setPasswordNotice("");
-  }
-
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (passwordChangeRequired) {
-      if (forcedNewPassword.length < 8 || forcedNewPassword.length > 128) {
-        setPasswordError("新密码需为 8-128 位");
-        return;
-      }
-      if (forcedNewPassword !== forcedConfirmPassword) {
-        setPasswordError("两次输入的新密码不一致");
-        return;
-      }
-    } else if (!username.trim() || !password) {
+    if (!username.trim() || !password) {
       setPasswordError("请输入账号和密码");
       return;
     }
 
     setPasswordError("");
-    setPasswordNotice("");
 
     try {
       const response = await fetch("/api/access", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: passwordChangeRequired
-            ? "complete-recovery"
-            : registrationOpen
-              ? "register"
-              : "login",
+          action: registrationOpen ? "register" : "login",
           username,
           password,
-          newPassword: forcedNewPassword,
         }),
       });
 
@@ -758,83 +750,38 @@ export default function LedgerClient({
         return;
       }
 
-      if (passwordChangeRequired) {
-        setPasswordChangeRequired(false);
-        setForcedNewPassword("");
-        setForcedConfirmPassword("");
-        setPassword("");
-        setCurrentUsername("");
-        setPasswordNotice("密码已修改，请使用新密码登录");
-        await loadLedger(false);
-        return;
-      }
-
-      const payload = (await response.json().catch(() => ({}))) as {
-        passwordChangeRequired?: boolean;
-      };
       setPassword("");
       setCurrentUsername(username.trim());
       setRegistrationOpen(false);
-      if (payload.passwordChangeRequired) {
-        setPasswordChangeRequired(true);
-        setForcedNewPassword("");
-        setForcedConfirmPassword("");
-        await loadLedger(false);
-        return;
-      }
-      closeAuthPanel();
+      setAuthPanelOpen(false);
+      window.dispatchEvent(new Event(shellAuthChangedEvent));
       await loadLedger(true);
+      const nextPath = new URLSearchParams(window.location.search).get("next");
+      if (nextPath?.startsWith("/") && !nextPath.startsWith("//")) {
+        window.location.assign(nextPath);
+      }
     } catch {
       setPasswordError("无法验证密码，请稍后重试");
     }
   }
 
-  function requestPasswordRecovery() {
-    if (!username.trim()) {
-      setPasswordError("请先填写管理员账号");
-      return;
-    }
-    setPasswordError("");
-    setPendingPasswordRecovery(true);
-  }
-
-  async function confirmPasswordRecovery() {
-    setPendingPasswordRecovery(false);
-    setPasswordError("");
-    setPasswordNotice("正在生成临时密码文件");
-    try {
-      const response = await fetch("/api/access", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "recover", username }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "生成临时密码失败");
-      setPassword("");
-      setPasswordNotice("临时密码已写入数据目录下的 password 文件");
-      await loadLedger(false);
-    } catch (error) {
-      setPasswordNotice("");
-      setPasswordError(error instanceof Error ? error.message : "生成临时密码失败");
-    }
-  }
-
-  async function lockLedger() {
-    await fetch("/api/access", { method: "DELETE" }).catch(() => undefined);
-    saveRequestRef.current += 1;
-    setRecordsDirty(false);
-    setStorageError("");
-    setSaveStatus("idle");
-    setCurrentUsername("");
-    setEditingId(null);
-    setActiveView("records");
-    setPassword("");
-    await loadLedger(false);
-  }
-
   const platformRecords = useMemo(
     () => records.filter((record) => record.platform === activePlatform),
     [activePlatform, records],
+  );
+
+  const activePurchaseIds = useMemo(() => new Set(records.map((record) => record.id)), [records]);
+  const unlinkedNintendoHistoryGames = useMemo(
+    () =>
+      libraryPlayGames.filter(
+        (game) =>
+          !game.link?.purchaseRecordId || !activePurchaseIds.has(game.link.purchaseRecordId),
+      ),
+    [activePurchaseIds, libraryPlayGames],
+  );
+  const unlinkedHistoryGames = useMemo(
+    () => (activePlatform === "Nintendo Switch" ? unlinkedNintendoHistoryGames : []),
+    [activePlatform, unlinkedNintendoHistoryGames],
   );
 
   const statsRecords = useMemo(
@@ -853,23 +800,10 @@ export default function LedgerClient({
       : "仅 NS"
     : "仅 PS";
 
-  const shareVisibleRecords = useMemo(
-    () =>
-      sharePlatformFilter === "all"
-        ? records
-        : records.filter((record) => record.platform === sharePlatformFilter),
-    [records, sharePlatformFilter],
-  );
-
   const filteredRecords = useMemo(() => {
     const normalizedQuery = normalizeChineseSearchText(query);
-    const matchingRecords = platformRecords.filter(
-      (record) =>
-        (regionFilter === "all" || record.region === regionFilter) &&
-        (formatFilter === "all" || record.format === formatFilter),
-    );
     const source = normalizedQuery
-      ? matchingRecords.filter((record) =>
+      ? platformRecords.filter((record) =>
           textMatchesQuery(
             [
               record.title,
@@ -878,19 +812,13 @@ export default function LedgerClient({
               record.seller,
               record.notes,
               record.soldDate ? "已卖出" : "持有中",
-              isFrozenPsPlusRecord(record, settings.psPlusEnabled) ? "PS Plus 会员冻结" : "",
             ].join(" "),
             normalizedQuery,
           ),
         )
-      : matchingRecords;
+      : platformRecords;
 
     return [...source].sort((a, b) => {
-      const inactiveOrder =
-        Number(Boolean(a.soldDate) || isFrozenPsPlusRecord(a, settings.psPlusEnabled)) -
-        Number(Boolean(b.soldDate) || isFrozenPsPlusRecord(b, settings.psPlusEnabled));
-      if (inactiveOrder !== 0) return inactiveOrder;
-
       if (sortBy === "price") {
         return (
           (convertToCny(b.price, b.currency, exchangeRates) ?? b.price) -
@@ -904,21 +832,35 @@ export default function LedgerClient({
 
       return new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime();
     });
-  }, [
-    exchangeRates,
-    formatFilter,
-    platformRecords,
-    query,
-    regionFilter,
-    settings.psPlusEnabled,
-    sortBy,
-  ]);
+  }, [exchangeRates, platformRecords, query, sortBy]);
 
-  const switchCount = records.filter((record) => record.platform === "Nintendo Switch").length;
-  const playStationCount = records.length - switchCount;
-  const physicalCount = statsRecords.filter((record) => isPhysicalFormat(record.format)).length;
-  const digitalCount = statsRecords.length - physicalCount;
+  const filteredHistoryGames = useMemo(() => {
+    const normalizedQuery = normalizeChineseSearchText(query);
+    const source = normalizedQuery
+      ? unlinkedHistoryGames.filter((game) =>
+          textMatchesQuery(
+            `${game.title} ${game.platform} ${game.source} 历史游玩 待补资料`,
+            normalizedQuery,
+          ),
+        )
+      : unlinkedHistoryGames;
+    return [...source].sort((a, b) => {
+      if (sortBy === "title") return a.title.localeCompare(b.title, "zh-Hans-CN");
+      return b.lastPlayedAt.localeCompare(a.lastPlayedAt);
+    });
+  }, [query, sortBy, unlinkedHistoryGames]);
+  const visibleHistoryGames = useMemo(
+    () =>
+      query.trim() || historyExpanded ? filteredHistoryGames : filteredHistoryGames.slice(0, 6),
+    [filteredHistoryGames, historyExpanded, query],
+  );
+
   const soldCount = statsRecords.filter((record) => record.soldDate).length;
+  const totalLibraryGames =
+    statsRecords.length + (settings.showNintendoSwitch ? unlinkedNintendoHistoryGames.length : 0);
+  const currentPlatformLibraryGames =
+    platformRecords.length +
+    (activePlatform === "Nintendo Switch" ? unlinkedNintendoHistoryGames.length : 0);
   const purchaseCnyStats = useMemo(
     () =>
       sumRecordsInCny(statsRecords, exchangeRates, (record) => ({
@@ -948,34 +890,14 @@ export default function LedgerClient({
   function resetForm() {
     coverLookupRequestRef.current += 1;
     setEditingId(null);
+    setHistoryGameId(null);
+    setHistorySaveError("");
+    setHistoryRegionConfirmed(true);
+    setHistoryFormatConfirmed(true);
     setForm(createEmptyForm(activePlatform));
-    setSaleEnabled(false);
     setCoverResults([]);
     setCoverError("");
     setCoverStatus("idle");
-  }
-
-  function switchPlatformPage(platform: GamePlatform) {
-    applyPlatformPage(platform, "push");
-    setActiveView("records");
-  }
-
-  function switchView(view: ActiveView) {
-    if (view === "records") {
-      setActiveView("records");
-      setPlatformUrl(activePlatform, "push");
-      return;
-    }
-    if (view === "ps-plus-catalog" || view === "memberships") {
-      setActiveView(view);
-      setViewUrl(view);
-      return;
-    }
-    if (view === "form") {
-      setResumeRecognitionAfterSave(false);
-      resetForm();
-    }
-    setActiveView(view);
   }
 
   function openPurchaseRecognition() {
@@ -983,23 +905,25 @@ export default function LedgerClient({
     if (activeView !== "records") setActiveView("records");
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (historyGameId && (!historyRegionConfirmed || !historyFormatConfirmed)) {
+      setHistorySaveError("请先确认游戏版本和介质");
+      return;
+    }
 
     const normalized: FormState = {
       ...form,
       title: form.title.trim(),
-      seller: isPhysicalFormat(form.format) ? form.seller.trim() : "",
+      seller: form.seller.trim(),
       coverUrl: form.coverUrl.trim(),
       officialUrl: form.officialUrl.trim(),
       notes: form.notes.trim(),
       price: Number(form.price) || 0,
       format: normalizeFormatForPlatform(form.format, form.platform),
-      soldDate: isPhysicalFormat(form.format) && saleEnabled ? form.soldDate : "",
-      soldPrice:
-        isPhysicalFormat(form.format) && saleEnabled && form.soldDate
-          ? Number(form.soldPrice) || 0
-          : 0,
+      soldDate: isPhysicalFormat(form.format) ? form.soldDate : "",
+      soldPrice: isPhysicalFormat(form.format) && form.soldDate ? Number(form.soldPrice) || 0 : 0,
       soldCurrency: form.soldCurrency,
     };
 
@@ -1007,10 +931,33 @@ export default function LedgerClient({
       return;
     }
 
+    if (historyGameId) {
+      setHistorySaveError("");
+      setSaveStatus("saving");
+      try {
+        const response = await fetch(
+          `/api/play-history/${encodeURIComponent(historyGameId)}/collection`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(normalized),
+          },
+        );
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) throw new Error(payload.error || "无法保存收藏资料");
+        await loadLedger(true);
+        setSaveStatus("saved");
+      } catch (error) {
+        setSaveStatus("error");
+        setHistorySaveError(error instanceof Error ? error.message : "无法保存收藏资料");
+      }
+      return;
+    }
+
     if (editingId) {
       setRecords((current) =>
         current.map((record) =>
-          record.id === editingId ? { ...record, ...normalized, id: editingId } : record,
+          record.id === editingId ? { ...normalized, id: editingId } : record,
         ),
       );
     } else {
@@ -1032,10 +979,13 @@ export default function LedgerClient({
 
   function editRecord(record: GameRecord) {
     setResumeRecognitionAfterSave(false);
+    setHistoryGameId(null);
+    setHistorySaveError("");
+    setHistoryRegionConfirmed(true);
+    setHistoryFormatConfirmed(true);
     setEditingId(record.id);
     setPlatformUrl(record.platform, "replace");
     setActivePlatform(record.platform);
-    setSaleEnabled(Boolean(record.soldDate));
     setForm({
       platform: record.platform,
       title: record.title,
@@ -1055,12 +1005,32 @@ export default function LedgerClient({
     setActiveView("form");
   }
 
+  function completeHistoryGame(game: LibraryPlayGame) {
+    setResumeRecognitionAfterSave(false);
+    setEditingId(null);
+    setHistoryGameId(game.id);
+    setHistorySaveError("");
+    setHistoryRegionConfirmed(false);
+    setHistoryFormatConfirmed(false);
+    setPlatformUrl("Nintendo Switch", "replace");
+    setActivePlatform("Nintendo Switch");
+    setForm({
+      ...createEmptyForm("Nintendo Switch"),
+      title: game.title,
+      purchaseDate: "",
+      region: "其他",
+      coverUrl: game.coverUrl,
+      officialUrl: game.officialUrl,
+    });
+    setActiveView("form");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function updateFormat(format: GameFormat) {
-    if (!isPhysicalFormat(format)) setSaleEnabled(false);
+    if (historyGameId) setHistoryFormatConfirmed(true);
     setForm((current) => ({
       ...current,
       format,
-      seller: isPhysicalFormat(format) ? current.seller : "",
       soldDate: isPhysicalFormat(format) ? current.soldDate : "",
       soldPrice: isPhysicalFormat(format) ? current.soldPrice : 0,
       soldCurrency: isPhysicalFormat(format) ? current.soldCurrency : current.currency,
@@ -1074,12 +1044,10 @@ export default function LedgerClient({
     setActivePlatform(platform);
     setCoverResults([]);
     setCoverError("");
-    if (!isPhysicalFormat(normalizeFormatForPlatform(form.format, platform))) {
-      setSaleEnabled(false);
-    }
     setForm((current) => ({
       ...current,
       platform,
+      region: platform === "PlayStation" && current.region === "日版" ? "港版" : current.region,
       format: normalizeFormatForPlatform(current.format, platform),
       soldDate: isPhysicalFormat(normalizeFormatForPlatform(current.format, platform))
         ? current.soldDate
@@ -1091,7 +1059,6 @@ export default function LedgerClient({
   }
 
   function toggleSold(checked: boolean) {
-    setSaleEnabled(checked);
     setForm((current) => ({
       ...current,
       soldDate: checked ? current.soldDate || todayString() : "",
@@ -1111,17 +1078,10 @@ export default function LedgerClient({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function requestDeleteRecord(record: GameRecord) {
-    setPendingDeleteRecord(record);
-  }
-
-  function confirmDeleteRecord() {
-    if (!pendingDeleteRecord) return;
-    const recordId = pendingDeleteRecord.id;
+  function deleteRecord(recordId: string) {
     setRecords((current) => current.filter((record) => record.id !== recordId));
     setRecordsDirty(true);
     setSaveStatus("saving");
-    setPendingDeleteRecord(null);
     if (editingId === recordId) {
       resetForm();
     }
@@ -1137,8 +1097,7 @@ export default function LedgerClient({
   async function generateShareImage() {
     setShareStatus("generating");
     try {
-      const selectedRecords = records.filter((record) => shareRecordIds.includes(record.id));
-      const blob = await createLibraryShareImage(selectedRecords, shareOptions);
+      const blob = await createLibraryShareImage(records, shareOptions);
       if (shareImageUrl) URL.revokeObjectURL(shareImageUrl);
       setShareImageUrl(URL.createObjectURL(blob));
       setShareStatus("idle");
@@ -1149,8 +1108,7 @@ export default function LedgerClient({
 
   async function shareLibraryImage() {
     try {
-      const selectedRecords = records.filter((record) => shareRecordIds.includes(record.id));
-      const blob = await createLibraryShareImage(selectedRecords, shareOptions);
+      const blob = await createLibraryShareImage(records, shareOptions);
       const file = new File([blob], `game-library-${todayString()}.png`, { type: "image/png" });
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ title: "我的游戏收藏", files: [file] });
@@ -1227,7 +1185,6 @@ export default function LedgerClient({
     setEditingId(null);
     setPlatformUrl(game.platform, "replace");
     setActivePlatform(game.platform);
-    setSaleEnabled(false);
     setForm(nextForm);
     setCoverResults([]);
     setCoverError("");
@@ -1257,54 +1214,26 @@ export default function LedgerClient({
         : parsed && typeof parsed === "object" && "records" in parsed
           ? (parsed as { records?: unknown }).records
           : null;
-      const parsedSettings =
-        parsed && typeof parsed === "object" && "settings" in parsed
-          ? (parsed as { settings?: unknown }).settings
-          : null;
 
-      if (
-        !Array.isArray(parsedRecords) &&
-        (!parsedSettings || typeof parsedSettings !== "object")
-      ) {
-        throw new Error("JSON 中没有可恢复的记录或设置");
+      if (!Array.isArray(parsedRecords)) {
+        throw new Error("Expected an array");
       }
-      if (Array.isArray(parsedRecords) && parsedRecords.length > ledgerLimits.maxRecords)
+      if (parsedRecords.length > ledgerLimits.maxRecords)
         throw new Error(`记录数量不能超过 ${ledgerLimits.maxRecords} 条`);
 
-      const importedRecords = (Array.isArray(parsedRecords) ? parsedRecords : [])
+      const importedRecords = parsedRecords
         .map(normalizeImportedRecord)
         .filter((record): record is GameRecord => Boolean(record));
 
-      if (Array.isArray(parsedRecords) && parsedRecords.length && !importedRecords.length) {
-        throw new Error("JSON 中没有有效的游戏记录");
+      if (!importedRecords.length) {
+        throw new Error("No valid records");
       }
 
-      if (Array.isArray(parsedRecords)) {
-        setRecords(importedRecords);
-        setRecordsDirty(true);
-        setSaveStatus("saving");
-      }
-      if (parsedSettings && typeof parsedSettings === "object") {
-        const response = await fetch("/api/settings", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...settings, ...parsedSettings, aiApiKey: "" }),
-        });
-        const restoredSettings = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(restoredSettings.error || "设置恢复失败");
-        setSettings((current) => ({ ...current, ...restoredSettings, aiApiKey: "" }));
-        updateThemeColor(restoredSettings.themeColor);
-        document.title = restoredSettings.siteTitle;
-      }
+      setRecords(importedRecords);
+      setRecordsDirty(true);
+      setSaveStatus("saving");
       resetForm();
-      setSettingsStatus(
-        [
-          Array.isArray(parsedRecords) ? `已导入 ${importedRecords.length} 条记录` : "",
-          parsedSettings ? "已恢复设置" : "",
-        ]
-          .filter(Boolean)
-          .join("，"),
-      );
+      setSettingsStatus(`已导入 ${importedRecords.length} 条记录`);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "JSON 文件不是有效的游戏购买记录");
     } finally {
@@ -1398,1379 +1327,1261 @@ export default function LedgerClient({
 
   if (accessStatus === "checking") {
     return (
-      <main className="login-screen flex min-h-screen items-center justify-center px-4 py-8 text-base-content">
+      <section className="login-screen flex min-h-64 items-center justify-center px-4 py-8 text-base-content">
         <p className="text-sm font-semibold text-base-content/70">正在加载游戏记录</p>
-      </main>
+      </section>
     );
   }
 
-  const libraryToolbarItems: ToolbarGroup["items"] = [
-    ...(settings.showNintendoSwitch
-      ? [
-          {
-            id: "nintendo-switch",
-            label: "Nintendo Switch",
-            icon: "NS",
-            badge: switchCount,
-            active: activeView === "records" && activePlatform === "Nintendo Switch",
-            onSelect: () => switchPlatformPage("Nintendo Switch"),
-          },
-        ]
-      : []),
-    ...(settings.showPlayStation
-      ? [
-          {
-            id: "playstation",
-            label: "PlayStation",
-            icon: "PS",
-            badge: playStationCount,
-            active: activeView === "records" && activePlatform === "PlayStation",
-            onSelect: () => switchPlatformPage("PlayStation"),
-          },
-        ]
-      : []),
-  ];
-  const toolToolbarItems: ToolbarGroup["items"] = [
-    ...(settings.showPsPlusCatalog
-      ? [
-          {
-            id: "ps-plus-catalog",
-            label: "PS Plus 游戏库",
-            icon: "P+",
-            active: activeView === "ps-plus-catalog",
-            onSelect: () => switchView("ps-plus-catalog"),
-          },
-        ]
-      : []),
-    ...(accessStatus === "unlocked" && settings.showMemberships
-      ? [
-          {
-            id: "memberships",
-            label: "会员记录",
-            icon: "会",
-            active: activeView === "memberships",
-            onSelect: () => switchView("memberships"),
-          },
-        ]
-      : []),
-  ];
-  const toolbarGroups: ToolbarGroup[] = [
-    {
-      id: "library",
-      label: "游戏库",
-      items: libraryToolbarItems,
-    },
-    ...(toolToolbarItems.length ? [{ id: "tools", label: "工具", items: toolToolbarItems }] : []),
-    ...(accessStatus === "unlocked"
-      ? [
-          {
-            id: "manage",
-            label: "管理工具",
-            items: [
-              {
-                id: "settings",
-                label: "设置",
-                icon: "设",
-                active: activeView === "settings",
-                onSelect: () => switchView("settings"),
-              },
-            ],
-          },
-        ]
-      : []),
-  ];
-  const mobileToolbarGroups = toolbarGroups.filter((group) => group.id !== "manage");
-
   return (
-    <main className="ledger-page min-h-screen text-base-content">
-      <div className="ledger-shell">
-        <aside className="ledger-sidebar ledger-sidebar-left">
-          <div className="ledger-brand">
-            <span>GN</span>
-            <div>
-              <strong>{settings.siteTitle}</strong>
-              <small>游戏收藏记录</small>
-            </div>
-          </div>
-          <AppToolbar groups={toolbarGroups} />
-          <div className="sidebar-account">
-            {accessStatus === "unlocked" ? (
-              <>
-                <strong>{currentUsername}</strong>
-                <small>管理员</small>
-                <button type="button" onClick={lockLedger}>
-                  退出登录
-                </button>
-              </>
-            ) : (
-              <>
-                <strong>访客</strong>
-                <small>只读浏览</small>
-                <button type="button" onClick={openAuthPanel}>
-                  {registrationOpen ? "注册管理员" : "管理员登录"}
-                </button>
-              </>
-            )}
-          </div>
-        </aside>
-
-        <div className="ledger-main-column">
-          <header className="ledger-header">
-            <div className="header-primary-row">
-              <div className="min-w-0">
-                <p className="ledger-kicker">
-                  {activeView === "ps-plus-catalog"
-                    ? "PlayStation Plus"
-                    : activeView === "memberships"
-                      ? "Memberships"
-                      : platformLabel(activePlatform)}
-                </p>
-                <h1 className="mt-1 text-2xl font-bold tracking-normal">
-                  {activeView === "ps-plus-catalog"
-                    ? "PS Plus 游戏库"
-                    : activeView === "memberships"
-                      ? "会员记录"
-                      : activePlatform === "PlayStation"
-                        ? "PlayStation 游戏"
-                        : "NS 游戏"}
-                </h1>
-                <p className="mt-1 text-sm text-base-content/60">
-                  {activeView === "ps-plus-catalog" ? (
-                    "浏览港区升级与高级完整会员游戏目录"
-                  ) : activeView === "memberships" ? (
-                    "记录 NS 与 PS 会员状态和到期时间"
-                  ) : (
-                    <>
-                      共 {platformRecords.length} 款，按
-                      {sortBy === "date" ? "购买日期" : sortBy === "price" ? "价格" : "名称"}排列
-                    </>
-                  )}
-                </p>
-              </div>
-              <div className="header-account-actions">
-                {saveStatusLabel(saveStatus) ? (
-                  <span
-                    className={`text-sm font-semibold ${
-                      saveStatus === "error" ? "text-error" : "text-base-content/70"
-                    }`}
-                  >
-                    {saveStatusLabel(saveStatus)}
-                  </span>
-                ) : null}
-                {accessStatus === "locked" ? (
-                  <span className="readonly-badge">只读浏览</span>
-                ) : null}
-                <div className="desktop-header-avatar" aria-hidden="true">
-                  {settings.avatarUrl ? (
-                    <img className="header-avatar" src={settings.avatarUrl} alt="" />
-                  ) : (
-                    <span className="header-avatar-fallback">
-                      {currentUsername?.[0]?.toUpperCase() || "G"}
-                    </span>
-                  )}
-                </div>
-                <MobileAccountMenu
-                  avatarUrl={settings.avatarUrl}
-                  authenticated={accessStatus === "unlocked"}
-                  registrationOpen={registrationOpen}
-                  username={currentUsername}
-                  onLogin={openAuthPanel}
-                  onLogout={lockLedger}
-                  onSettings={() => switchView("settings")}
-                />
-              </div>
-            </div>
-            {storageError ? (
-              <p className="alert alert-warning mt-3 py-2 text-sm font-semibold">{storageError}</p>
-            ) : null}
-            <div className="mobile-navigation">
-              <AppToolbar groups={mobileToolbarGroups} compact />
-            </div>
-          </header>
-
-          {storageReady ? (
-            <section className="min-w-0">
-              {activeView === "form" && accessStatus === "unlocked" ? (
-                <form onSubmit={handleSubmit} className="app-surface overflow-hidden">
-                  <div className="surface-toolbar flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-                    <div>
-                      <p className="text-xs font-bold uppercase text-primary">
-                        {editingId ? "Edit game" : "New game"}
+    <section className="ledger-workspace">
+      <div className="ledger-workspace-main">
+        {beforeContent}
+        {storageReady ? (
+          <section className="min-w-0">
+            {activeView === "form" && accessStatus === "unlocked" ? (
+              <form onSubmit={handleSubmit} className="app-surface overflow-hidden">
+                <div className="surface-toolbar flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-primary">
+                      {historyGameId ? "From play history" : editingId ? "Edit game" : "New game"}
+                    </p>
+                    <h2 className="mt-1 text-xl font-bold">
+                      {historyGameId ? "完善收藏资料" : editingId ? "编辑游戏" : "新增游戏"}
+                    </h2>
+                    {historyGameId ? (
+                      <p className="mt-1 text-sm text-base-content/65">
+                        游戏名和历史封面已带入；请确认版本、介质与购买信息，购买日期可以留空。
                       </p>
-                      <h2 className="mt-1 text-xl font-bold">
-                        {editingId ? "编辑游戏" : "新增游戏"}
-                      </h2>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {editingId || historyGameId ? (
+                      <button type="button" className="ghost-button" onClick={resetForm}>
+                        取消编辑
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => {
+                        setResumeRecognitionAfterSave(false);
+                        setActiveView("records");
+                      }}
+                    >
+                      返回记录
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid gap-0 xl:grid-cols-[360px_minmax(0,1fr)]">
+                  <aside className="border-b border-base-300 bg-base-200 p-4 sm:p-5 xl:border-b-0 xl:border-r xl:border-base-300">
+                    <div className="cover-frame overflow-hidden">
+                      {form.coverUrl ? (
+                        <img
+                          src={form.coverUrl}
+                          alt={`${form.title || "游戏"}封面`}
+                          className="h-48 w-full object-cover sm:h-60"
+                        />
+                      ) : (
+                        <div className="flex h-48 items-center justify-center bg-primary px-8 text-center text-4xl font-black text-primary-content sm:h-60">
+                          {coverLabel(form.title) ||
+                            (form.platform === "PlayStation" ? "PS" : "SWITCH")}
+                        </div>
+                      )}
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {editingId ? (
-                        <button type="button" className="ghost-button" onClick={resetForm}>
-                          取消编辑
-                        </button>
-                      ) : null}
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={coverStatus === "searching" || !form.title.trim()}
+                        onClick={() => lookupOfficialGame("title")}
+                      >
+                        {coverStatus === "searching" ? "查询中" : "按名称找官方数据"}
+                      </button>
                       <button
                         type="button"
                         className="ghost-button"
-                        onClick={() => {
-                          setResumeRecognitionAfterSave(false);
-                          setActiveView("records");
-                        }}
+                        disabled={coverStatus === "searching" || !form.officialUrl.trim()}
+                        onClick={() => lookupOfficialGame("url")}
                       >
-                        返回记录
+                        从页面取数据
                       </button>
                     </div>
-                  </div>
 
-                  <div className="grid gap-0 xl:grid-cols-[360px_minmax(0,1fr)]">
-                    <aside className="border-b border-base-300 bg-base-200 p-4 sm:p-5 xl:border-b-0 xl:border-r xl:border-base-300">
-                      <div className="cover-frame overflow-hidden">
-                        {form.coverUrl ? (
-                          <img
-                            src={form.coverUrl}
-                            alt={`${form.title || "游戏"}封面`}
-                            className="h-48 w-full object-cover sm:h-60"
+                    {coverError ? (
+                      <p className="alert alert-warning mt-2 py-2 text-sm font-semibold">
+                        {coverError}
+                      </p>
+                    ) : null}
+
+                    {coverResults.length ? (
+                      <div className="mt-3 grid gap-2">
+                        {coverResults.map((result) => {
+                          const priceLabel = lookupPriceLabel(result);
+
+                          return (
+                            <button
+                              key={result.id}
+                              type="button"
+                              className="cover-result"
+                              onClick={() => applyOfficialGame(result)}
+                            >
+                              <img
+                                src={result.coverUrl}
+                                alt={`${result.displayTitle || result.title}封面`}
+                                loading="lazy"
+                                decoding="async"
+                              />
+                              <span>
+                                <strong>{result.displayTitle || result.title}</strong>
+                                <small>
+                                  {coverSourceLabel(result.source)} · {result.platform}
+                                  {result.releaseDate
+                                    ? ` · ${result.releaseDate.slice(0, 10)}`
+                                    : ""}
+                                  {priceLabel ? ` · ${priceLabel}` : ""}
+                                </small>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </aside>
+
+                  <div className="p-4 sm:p-5">
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <label className="field">
+                        <span>平台</span>
+                        <AppleSelect
+                          ariaLabel="平台"
+                          value={form.platform}
+                          options={gamePlatforms
+                            .filter(
+                              (platform) => platform !== "PlayStation" || settings.showPlayStation,
+                            )
+                            .map((platform) => ({
+                              value: platform,
+                              label: platformLabel(platform),
+                            }))}
+                          onChange={updatePlatform}
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>游戏名字</span>
+                        <input
+                          required
+                          value={form.title}
+                          onChange={(event) => updateForm("title", event.target.value)}
+                          placeholder="例如 塞尔达 / Elden Ring / Final Fantasy"
+                        />
+                      </label>
+
+                      <div className="grid gap-3 sm:grid-cols-[1fr_minmax(12rem,0.55fr)]">
+                        <label className="field">
+                          <span>价格</span>
+                          <input
+                            min="0"
+                            step="0.01"
+                            type="number"
+                            value={form.price || ""}
+                            onChange={(event) => updateForm("price", Number(event.target.value))}
+                            placeholder="0.00"
                           />
-                        ) : (
-                          <div className="flex h-48 items-center justify-center bg-primary px-8 text-center text-4xl font-black text-primary-content sm:h-60">
-                            {coverLabel(form.title) ||
-                              (form.platform === "PlayStation" ? "PS" : "SWITCH")}
-                          </div>
-                        )}
+                        </label>
+                        <label className="field">
+                          <span>币种</span>
+                          <AppleSelect
+                            ariaLabel="币种"
+                            value={form.currency}
+                            options={currencies.map((currency) => ({
+                              value: currency,
+                              label: currencyLabel(currency),
+                            }))}
+                            onChange={(currency) => updateForm("currency", currency)}
+                          />
+                        </label>
                       </div>
-
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={coverStatus === "searching" || !form.title.trim()}
-                          onClick={() => lookupOfficialGame("title")}
-                        >
-                          {coverStatus === "searching" ? "查询中" : "按名称找官方数据"}
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          disabled={coverStatus === "searching" || !form.officialUrl.trim()}
-                          onClick={() => lookupOfficialGame("url")}
-                        >
-                          从页面取数据
-                        </button>
-                      </div>
-
-                      {coverError ? (
-                        <p className="alert alert-warning mt-2 py-2 text-sm font-semibold">
-                          {coverError}
+                      {form.price && form.currency !== "CNY" ? (
+                        <p className="rounded-xl bg-base-200 px-3 py-2 text-sm font-semibold text-base-content/70 lg:col-span-2">
+                          {formatCnyConversion(form.price, form.currency, exchangeRates)}
                         </p>
                       ) : null}
 
-                      {coverResults.length ? (
-                        <div className="mt-3 grid gap-2">
-                          {coverResults.map((result) => {
-                            const priceLabel = lookupPriceLabel(result);
+                      <label className="field">
+                        <span>购买日期</span>
+                        <input
+                          type="date"
+                          value={form.purchaseDate}
+                          onChange={(event) => updateForm("purchaseDate", event.target.value)}
+                        />
+                      </label>
 
+                      <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2">
+                        <label className="field">
+                          <span>版本</span>
+                          <AppleSelect<Region | "">
+                            ariaLabel="版本"
+                            required
+                            value={historyGameId && !historyRegionConfirmed ? "" : form.region}
+                            placeholder="请选择版本"
+                            options={regions.map((region) => ({ value: region, label: region }))}
+                            onChange={(region) => {
+                              if (!region) return;
+                              setHistoryRegionConfirmed(true);
+                              updateForm("region", region);
+                            }}
+                          />
+                        </label>
+                        <label className="field">
+                          <span>介质</span>
+                          <AppleSelect<GameFormat | "">
+                            ariaLabel="介质"
+                            required
+                            value={historyGameId && !historyFormatConfirmed ? "" : form.format}
+                            placeholder="请选择介质"
+                            options={formatOptionsForPlatform(form.platform).map((format) => ({
+                              value: format,
+                              label: format,
+                            }))}
+                            onChange={(format) => {
+                              if (format) updateFormat(format);
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      {isPhysicalFormat(form.format) ? (
+                        <div className="sale-panel p-3 lg:col-span-2">
+                          <label className="checkbox-field">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(form.soldDate)}
+                              onChange={(event) => toggleSold(event.target.checked)}
+                            />
+                            <span>这份实体游戏已卖出</span>
+                          </label>
+
+                          {form.soldDate ? (
+                            <>
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(12rem,0.8fr)]">
+                                <label className="field">
+                                  <span>卖出日期</span>
+                                  <input
+                                    required
+                                    type="date"
+                                    value={form.soldDate}
+                                    onChange={(event) => updateForm("soldDate", event.target.value)}
+                                  />
+                                </label>
+                                <label className="field">
+                                  <span>卖出价格</span>
+                                  <input
+                                    min="0"
+                                    step="0.01"
+                                    type="number"
+                                    value={form.soldPrice || ""}
+                                    onChange={(event) =>
+                                      updateForm("soldPrice", Number(event.target.value))
+                                    }
+                                    placeholder="0.00"
+                                  />
+                                </label>
+                                <label className="field">
+                                  <span>币种</span>
+                                  <AppleSelect
+                                    ariaLabel="卖出币种"
+                                    value={form.soldCurrency}
+                                    options={currencies.map((currency) => ({
+                                      value: currency,
+                                      label: currencyLabel(currency),
+                                    }))}
+                                    onChange={(currency) => updateForm("soldCurrency", currency)}
+                                  />
+                                </label>
+                              </div>
+                              {form.soldPrice && form.soldCurrency !== "CNY" ? (
+                                <p className="mt-3 rounded-xl bg-base-100 px-3 py-2 text-sm font-semibold text-base-content/70">
+                                  {formatCnyConversion(
+                                    form.soldPrice,
+                                    form.soldCurrency,
+                                    exchangeRates,
+                                  )}
+                                </p>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <label className="field">
+                        <span>购买渠道</span>
+                        <input
+                          value={form.seller}
+                          onChange={(event) => updateForm("seller", event.target.value)}
+                          placeholder={
+                            isPhysicalFormat(form.format)
+                              ? "淘宝 / 闲鱼 / 线下店"
+                              : "Nintendo eShop / PlayStation Store"
+                          }
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>封面 URL</span>
+                        <input
+                          value={form.coverUrl}
+                          onChange={(event) => updateForm("coverUrl", event.target.value)}
+                          placeholder="官方图片地址"
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>{officialUrlLabel(form.platform)}</span>
+                        <input
+                          value={form.officialUrl}
+                          onChange={(event) => updateForm("officialUrl", event.target.value)}
+                          placeholder={officialUrlPlaceholder(form.platform)}
+                        />
+                      </label>
+
+                      <label className="field lg:col-span-2">
+                        <span>备注</span>
+                        <textarea
+                          value={form.notes}
+                          onChange={(event) => updateForm("notes", event.target.value)}
+                          placeholder="特典、成色、是否盒说齐全"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="flex flex-col gap-2 border-t border-base-300 pt-4 sm:flex-row sm:justify-end lg:col-span-2">
+                      {historySaveError ? (
+                        <p className="self-center text-sm font-semibold text-error sm:mr-auto">
+                          {historySaveError}
+                        </p>
+                      ) : null}
+                      <button
+                        className="ghost-button w-full sm:w-auto"
+                        type="button"
+                        onClick={() => setActiveView("records")}
+                      >
+                        返回记录
+                      </button>
+                      <button className="primary-button w-full sm:w-auto" type="submit">
+                        {historyGameId ? "保存并关联收藏" : editingId ? "保存修改" : "加入记录"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            ) : null}
+
+            {activeView === "settings" && accessStatus === "unlocked" ? (
+              <SettingsPage
+                settings={settings}
+                setSettings={setSettings}
+                settingsStatus={settingsStatus}
+                setSettingsStatus={setSettingsStatus}
+                aiModels={aiModels}
+                aiActionStatus={aiActionStatus}
+                onSubmit={saveSettings}
+                onThemeColorChange={updateThemeColor}
+                onAiAction={runAiConfigAction}
+                onChangePassword={changePassword}
+                onImportClick={importRecordsClick}
+                onImport={importRecords}
+                onExport={exportRecords}
+                fileInputRef={fileInputRef}
+              />
+            ) : null}
+
+            {activeView === "memberships" && accessStatus === "unlocked" ? (
+              <MembershipPage
+                settings={settings}
+                setSettings={setSettings}
+                settingsStatus={settingsStatus}
+                psPlusStatus={psPlusStatus}
+                onSubmit={saveSettings}
+                onSyncPsPlus={() => syncPsPlusGames(false)}
+              />
+            ) : null}
+
+            {activeView === "ps-plus-catalog" ? (
+              <PsPlusCatalogPage
+                accessStatus={accessStatus}
+                catalog={catalog}
+                catalogQuery={catalogQuery}
+                catalogStatus={catalogStatus}
+                catalogError={catalogError}
+                displayMode={catalogDisplayMode}
+                filteredGames={filteredCatalogGames}
+                visibleGames={visibleCatalogGames}
+                onQueryChange={setCatalogQuery}
+                onDisplayModeChange={setCatalogDisplayMode}
+                onLoad={loadPsPlusCatalog}
+                onLoadMore={(increment) => setCatalogVisibleCount((count) => count + increment)}
+              />
+            ) : null}
+
+            {activeView === "records" ? (
+              <section className="flex min-w-0 flex-col gap-4">
+                <div className="filter-panel main-filter-panel">
+                  <label className="field">
+                    <span>搜索</span>
+                    <span className="library-search-control">
+                      <LibraryControlIcon name="search" />
+                      <input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="游戏、版本、介质、渠道、备注"
+                      />
+                    </span>
+                  </label>
+                  <div className="field">
+                    <span>展示方式</span>
+                    <div className="display-mode-switch" role="group" aria-label="记录展示方式">
+                      <button
+                        className={recordDisplayMode === "grid" ? "active" : ""}
+                        type="button"
+                        aria-pressed={recordDisplayMode === "grid"}
+                        onClick={() => setRecordDisplayMode("grid")}
+                      >
+                        <LibraryControlIcon name="grid" />
+                        <span>网格</span>
+                      </button>
+                      <button
+                        className={recordDisplayMode === "list" ? "active" : ""}
+                        type="button"
+                        aria-pressed={recordDisplayMode === "list"}
+                        onClick={() => setRecordDisplayMode("list")}
+                      >
+                        <LibraryControlIcon name="list" />
+                        <span>列表</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <span>排序</span>
+                    <div className="library-sort-menu" ref={sortMenuRef}>
+                      <button
+                        className="library-sort-trigger"
+                        type="button"
+                        aria-controls="library-sort-options"
+                        aria-expanded={sortMenuOpen}
+                        onClick={() => setSortMenuOpen((open) => !open)}
+                      >
+                        <span className="library-sort-trigger__label">
+                          <LibraryControlIcon
+                            name={
+                              librarySortOptions.find((option) => option.value === sortBy)?.icon ||
+                              "clock"
+                            }
+                          />
+                          <span>
+                            {librarySortOptions.find((option) => option.value === sortBy)?.label}
+                          </span>
+                        </span>
+                        <LibraryControlIcon name="chevron" />
+                      </button>
+                      {sortMenuOpen ? (
+                        <div
+                          className="library-sort-popover"
+                          id="library-sort-options"
+                          role="group"
+                          aria-label="排序方式"
+                        >
+                          {librarySortOptions.map((option) => {
+                            const unavailable = option.value === "price" && !platformRecords.length;
                             return (
                               <button
-                                key={result.id}
+                                className="library-sort-option"
                                 type="button"
-                                className="cover-result"
-                                onClick={() => applyOfficialGame(result)}
+                                aria-pressed={sortBy === option.value}
+                                disabled={unavailable}
+                                key={option.value}
+                                onClick={() => {
+                                  setSortBy(option.value);
+                                  setSortMenuOpen(false);
+                                }}
                               >
-                                <img
-                                  src={result.coverUrl}
-                                  alt={`${result.displayTitle || result.title}封面`}
-                                  loading="lazy"
-                                  decoding="async"
-                                />
+                                <LibraryControlIcon name={option.icon} />
                                 <span>
-                                  <strong>{result.displayTitle || result.title}</strong>
+                                  <strong>{option.label}</strong>
                                   <small>
-                                    {coverSourceLabel(result.source)} · {result.platform}
-                                    {result.releaseDate
-                                      ? ` · ${result.releaseDate.slice(0, 10)}`
-                                      : ""}
-                                    {priceLabel ? ` · ${priceLabel}` : ""}
+                                    {unavailable ? "有收藏记录后可用" : option.description}
                                   </small>
                                 </span>
+                                {sortBy === option.value ? (
+                                  <LibraryControlIcon name="check" />
+                                ) : null}
                               </button>
                             );
                           })}
                         </div>
                       ) : null}
-                    </aside>
+                    </div>
+                  </div>
+                </div>
 
-                    <div className="p-4 sm:p-5">
-                      <div className="grid gap-3 lg:grid-cols-2">
-                        <label className="field">
-                          <span>平台</span>
-                          <select
-                            value={form.platform}
-                            onChange={(event) => updatePlatform(event.target.value as GamePlatform)}
+                {accessStatus === "unlocked" && activePlatform === "Nintendo Switch" ? (
+                  <section
+                    className="app-surface history-library-surface overflow-hidden"
+                    aria-labelledby="history-library-title"
+                  >
+                    <div className="surface-toolbar history-library-header">
+                      <div>
+                        <div className="history-library-title-row">
+                          <h2 id="history-library-title">待补收藏资料</h2>
+                          <span>{filteredHistoryGames.length} 款</span>
+                        </div>
+                        <p>
+                          历史同步已建立游戏档案；补充版本、介质与购买信息后，会自动进入 NS 收藏。
+                        </p>
+                      </div>
+                      <Link className="ghost-button shrink-0" href="/play/history">
+                        管理历史游玩
+                      </Link>
+                    </div>
+
+                    {filteredHistoryGames.length ? (
+                      <div
+                        className={`history-library-grid history-library-grid--${recordDisplayMode} p-4 sm:p-5`}
+                      >
+                        {visibleHistoryGames.map((game) => (
+                          <article key={game.id} className="history-library-item">
+                            <div className="history-library-cover bg-primary">
+                              {game.coverUrl ? (
+                                <img
+                                  src={game.coverUrl}
+                                  alt={`${game.title}封面`}
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              ) : (
+                                <span>{coverLabel(game.title) || "NS"}</span>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <h3 title={game.title}>{game.title}</h3>
+                              <p>{historyGamePlayLabel(game)}</p>
+                              <span className="history-source-badge">历史已同步</span>
+                            </div>
+                            <button
+                              className="ghost-button history-library-action"
+                              type="button"
+                              onClick={() => completeHistoryGame(game)}
+                            >
+                              补充资料
+                            </button>
+                          </article>
+                        ))}
+                        {!query.trim() && filteredHistoryGames.length > 6 ? (
+                          <button
+                            className="history-library-more"
+                            type="button"
+                            aria-expanded={historyExpanded}
+                            onClick={() => setHistoryExpanded((expanded) => !expanded)}
                           >
-                            {gamePlatforms.map((platform) => (
-                              <option key={platform} value={platform}>
-                                {platformLabel(platform)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="field">
-                          <span>游戏名字</span>
-                          <input
-                            required
-                            value={form.title}
-                            onChange={(event) => updateForm("title", event.target.value)}
-                            placeholder="例如 塞尔达 / Elden Ring / Final Fantasy"
-                          />
-                        </label>
-
-                        <div className="grid gap-3 sm:grid-cols-[1fr_minmax(12rem,0.55fr)]">
-                          <label className="field">
-                            <span>价格</span>
-                            <input
-                              min="0"
-                              step="0.01"
-                              type="number"
-                              value={form.price || ""}
-                              onChange={(event) => updateForm("price", Number(event.target.value))}
-                              placeholder="0.00"
-                            />
-                          </label>
-                          <label className="field">
-                            <span>币种</span>
-                            <select
-                              value={form.currency}
-                              onChange={(event) =>
-                                updateForm("currency", event.target.value as Currency)
-                              }
-                            >
-                              {currencies.map((currency) => (
-                                <option key={currency} value={currency}>
-                                  {currencyLabel(currency)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        {form.price && form.currency !== "CNY" ? (
-                          <p className="rounded-xl bg-base-200 px-3 py-2 text-sm font-semibold text-base-content/70 lg:col-span-2">
-                            {formatCnyConversion(form.price, form.currency, exchangeRates)}
-                          </p>
+                            {historyExpanded
+                              ? "收起历史游戏"
+                              : `查看其余 ${filteredHistoryGames.length - 6} 款`}
+                          </button>
                         ) : null}
+                      </div>
+                    ) : (
+                      <p className="px-4 py-4 text-sm font-semibold text-base-content/65 sm:px-5">
+                        {unlinkedHistoryGames.length
+                          ? "当前搜索没有匹配的历史游戏。"
+                          : "历史游戏都已关联收藏；以后同步到的新游戏会自动出现在这里。"}
+                      </p>
+                    )}
+                  </section>
+                ) : null}
 
-                        <label className="field">
-                          <span>购买日期</span>
-                          <input
-                            required
-                            type="date"
-                            value={form.purchaseDate}
-                            onChange={(event) => updateForm("purchaseDate", event.target.value)}
-                          />
-                        </label>
-
-                        <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2">
-                          <label className="field">
-                            <span>版本</span>
-                            <select
-                              value={form.region}
-                              onChange={(event) =>
-                                updateForm("region", event.target.value as Region)
-                              }
-                            >
-                              {regions.map((region) => (
-                                <option key={region}>{region}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="field">
-                            <span>状态</span>
-                            <select
-                              value={form.format}
-                              onChange={(event) => updateFormat(event.target.value as GameFormat)}
-                            >
-                              {formatOptionsForPlatform(form.platform).map((format) => (
-                                <option key={format}>{format}</option>
-                              ))}
-                            </select>
-                          </label>
+                <div
+                  className={
+                    recordDisplayMode === "grid"
+                      ? "record-results record-results-grid"
+                      : "record-results record-results-list grid"
+                  }
+                >
+                  {filteredRecords.map((record) =>
+                    recordDisplayMode === "grid" ? (
+                      <article
+                        key={record.id}
+                        className="record-card flex h-full flex-col overflow-hidden"
+                      >
+                        <div className="record-cover relative bg-primary">
+                          {record.coverUrl ? (
+                            <img
+                              src={record.coverUrl}
+                              alt={`${record.title}封面`}
+                              className="record-cover-image"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center px-8 text-center text-4xl font-black text-primary-content">
+                              {coverLabel(record.title) ||
+                                (record.platform === "PlayStation" ? "PS" : "NS")}
+                            </div>
+                          )}
+                          <div className="image-badge absolute left-3 top-3">{record.region}</div>
+                          <div className="image-badge alt absolute right-3 top-3">
+                            {record.soldDate ? "已卖出" : record.format}
+                          </div>
                         </div>
-
-                        {isPhysicalFormat(form.format) ? (
-                          <div className="sale-panel p-3 lg:col-span-2">
-                            <label className="checkbox-field">
-                              <input
-                                type="checkbox"
-                                checked={saleEnabled}
-                                onChange={(event) => toggleSold(event.target.checked)}
-                              />
-                              <span>这份实体游戏已卖出</span>
-                            </label>
-
-                            {saleEnabled ? (
-                              <>
-                                <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(12rem,0.8fr)]">
-                                  <label className="field">
-                                    <span>卖出日期</span>
-                                    <input
-                                      required
-                                      type="date"
-                                      value={form.soldDate}
-                                      onChange={(event) =>
-                                        updateForm("soldDate", event.target.value)
-                                      }
-                                    />
-                                  </label>
-                                  <label className="field">
-                                    <span>卖出价格</span>
-                                    <input
-                                      min="0"
-                                      step="0.01"
-                                      type="number"
-                                      value={form.soldPrice || ""}
-                                      onChange={(event) =>
-                                        updateForm("soldPrice", Number(event.target.value))
-                                      }
-                                      placeholder="0.00"
-                                    />
-                                  </label>
-                                  <label className="field">
-                                    <span>币种</span>
-                                    <select
-                                      value={form.soldCurrency}
-                                      onChange={(event) =>
-                                        updateForm("soldCurrency", event.target.value as Currency)
-                                      }
-                                    >
-                                      {currencies.map((currency) => (
-                                        <option key={currency} value={currency}>
-                                          {currencyLabel(currency)}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                </div>
-                                {form.soldPrice && form.soldCurrency !== "CNY" ? (
-                                  <p className="mt-3 rounded-xl bg-base-100 px-3 py-2 text-sm font-semibold text-base-content/70">
+                        <div className="flex flex-1 flex-col gap-3 p-3 sm:p-4">
+                          <div>
+                            <h3 className="line-clamp-2 min-h-12 text-lg font-semibold leading-6">
+                              {record.title}
+                            </h3>
+                            <p className="mt-1 text-sm text-base-content/60">
+                              {record.purchaseDate} · {record.format}
+                              {record.seller ? ` · ${record.seller}` : ""}
+                            </p>
+                            {playSummaries[record.id] ? (
+                              <p className="record-play-summary">
+                                {purchasePlayLabel(playSummaries[record.id])}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="mt-auto grid gap-3 border-t border-base-300 pt-3">
+                            <div className="grid min-h-[4.6rem] grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-base-content/60">买入</p>
+                                <span className="text-2xl font-bold text-primary">
+                                  {formatMoney(record.price, record.currency)}
+                                </span>
+                                {record.currency !== "CNY" ? (
+                                  <p className="mt-0.5 text-xs font-semibold leading-4 text-base-content/60">
                                     {formatCnyConversion(
-                                      form.soldPrice,
-                                      form.soldCurrency,
+                                      record.price,
+                                      record.currency,
                                       exchangeRates,
                                     )}
                                   </p>
                                 ) : null}
-                              </>
-                            ) : null}
-                          </div>
-                        ) : null}
-
-                        {isPhysicalFormat(form.format) ? (
-                          <label className="field">
-                            <span>购买渠道</span>
-                            <input
-                              value={form.seller}
-                              onChange={(event) => updateForm("seller", event.target.value)}
-                              placeholder="淘宝 / 闲鱼 / 线下店"
-                            />
-                          </label>
-                        ) : null}
-
-                        <label className="field">
-                          <span>封面 URL</span>
-                          <input
-                            value={form.coverUrl}
-                            onChange={(event) => updateForm("coverUrl", event.target.value)}
-                            placeholder="官方图片地址"
-                          />
-                        </label>
-
-                        <label className="field">
-                          <span>{officialUrlLabel(form.platform)}</span>
-                          <input
-                            value={form.officialUrl}
-                            onChange={(event) => updateForm("officialUrl", event.target.value)}
-                            placeholder={officialUrlPlaceholder(form.platform)}
-                          />
-                        </label>
-
-                        <label className="field lg:col-span-2">
-                          <span>备注</span>
-                          <textarea
-                            value={form.notes}
-                            onChange={(event) => updateForm("notes", event.target.value)}
-                            placeholder="特典、成色、是否盒说齐全"
-                          />
-                        </label>
-                      </div>
-
-                      <div className="flex flex-col gap-2 border-t border-base-300 pt-4 sm:flex-row sm:justify-end lg:col-span-2">
-                        <button
-                          className="ghost-button w-full sm:w-auto"
-                          type="button"
-                          onClick={() => setActiveView("records")}
-                        >
-                          返回记录
-                        </button>
-                        <button className="primary-button w-full sm:w-auto" type="submit">
-                          {editingId ? "保存修改" : "加入记录"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </form>
-              ) : null}
-
-              {activeView === "settings" && accessStatus === "unlocked" ? (
-                <SettingsPage
-                  settings={settings}
-                  setSettings={setSettings}
-                  settingsStatus={settingsStatus}
-                  setSettingsStatus={setSettingsStatus}
-                  aiModels={aiModels}
-                  aiActionStatus={aiActionStatus}
-                  onSubmit={saveSettings}
-                  onThemeColorChange={updateThemeColor}
-                  onAiAction={runAiConfigAction}
-                  onChangePassword={changePassword}
-                  onImportClick={importRecordsClick}
-                  onImport={importRecords}
-                  onExport={exportRecords}
-                  fileInputRef={fileInputRef}
-                  versionInfo={versionInfo}
-                  versionChecking={versionChecking}
-                  onCheckVersion={() => void checkVersion(true)}
-                />
-              ) : null}
-
-              {activeView === "memberships" && accessStatus === "unlocked" ? (
-                <MembershipPage
-                  settings={settings}
-                  setSettings={setSettings}
-                  settingsStatus={settingsStatus}
-                  psPlusStatus={psPlusStatus}
-                  onSubmit={saveSettings}
-                  onSyncPsPlus={() => syncPsPlusGames(false)}
-                  onHistoryCompleted={() => loadLedger(true)}
-                />
-              ) : null}
-
-              {activeView === "ps-plus-catalog" ? (
-                <PsPlusCatalogPage
-                  accessStatus={accessStatus}
-                  catalog={catalog}
-                  catalogQuery={catalogQuery}
-                  catalogStatus={catalogStatus}
-                  catalogError={catalogError}
-                  displayMode={catalogDisplayMode}
-                  filteredGames={filteredCatalogGames}
-                  visibleGames={visibleCatalogGames}
-                  onQueryChange={setCatalogQuery}
-                  onDisplayModeChange={changeCatalogDisplayMode}
-                  onLoad={loadPsPlusCatalog}
-                  onLoadMore={(increment) => setCatalogVisibleCount((count) => count + increment)}
-                />
-              ) : null}
-
-              {activeView === "records" ? (
-                <section className="flex min-w-0 flex-col gap-4">
-                  <div className="filter-panel main-filter-panel">
-                    <label className="field">
-                      <span>搜索</span>
-                      <input
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="游戏、版本、状态、渠道、备注"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>地区版本</span>
-                      <select
-                        value={regionFilter}
-                        onChange={(event) => setRegionFilter(event.target.value as Region | "all")}
-                      >
-                        <option value="all">全部地区</option>
-                        {regions.map((region) => (
-                          <option key={region} value={region}>
-                            {region}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>游戏形态</span>
-                      <select
-                        value={formatFilter}
-                        onChange={(event) =>
-                          setFormatFilter(event.target.value as GameFormat | "all")
-                        }
-                      >
-                        <option value="all">全部形态</option>
-                        {formatOptionsForPlatform(activePlatform).map((format) => (
-                          <option key={format} value={format}>
-                            {format}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="field">
-                      <span>展示方式</span>
-                      <div className="display-mode-switch" role="group" aria-label="记录展示方式">
-                        <button
-                          className={recordDisplayMode === "grid" ? "active" : ""}
-                          type="button"
-                          aria-pressed={recordDisplayMode === "grid"}
-                          onClick={() => changeRecordDisplayMode("grid")}
-                        >
-                          网格
-                        </button>
-                        <button
-                          className={recordDisplayMode === "list" ? "active" : ""}
-                          type="button"
-                          aria-pressed={recordDisplayMode === "list"}
-                          onClick={() => changeRecordDisplayMode("list")}
-                        >
-                          列表
-                        </button>
-                      </div>
-                    </div>
-                    <label className="field">
-                      <span>排序</span>
-                      <select
-                        value={sortBy}
-                        onChange={(event) =>
-                          setSortBy(event.target.value as "date" | "price" | "title")
-                        }
-                      >
-                        <option value="date">购买日期</option>
-                        <option value="price">价格</option>
-                        <option value="title">游戏名字</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div
-                    className={
-                      recordDisplayMode === "grid"
-                        ? "record-results record-results-grid"
-                        : "record-results record-results-list grid"
-                    }
-                  >
-                    {filteredRecords.map((record) =>
-                      recordDisplayMode === "grid" ? (
-                        <article
-                          key={record.id}
-                          className={`record-card flex h-full flex-col overflow-hidden${record.soldDate || isFrozenPsPlusRecord(record, settings.psPlusEnabled) ? " sold-record" : ""}`}
-                        >
-                          <div className="record-cover relative bg-primary">
-                            {record.coverUrl ? (
-                              <img
-                                src={record.coverUrl}
-                                alt={`${record.title}封面`}
-                                className="record-cover-image"
-                                loading="lazy"
-                                decoding="async"
-                              />
-                            ) : (
-                              <div className="flex h-full items-center justify-center px-8 text-center text-4xl font-black text-primary-content">
-                                {coverLabel(record.title) ||
-                                  (record.platform === "PlayStation" ? "PS" : "NS")}
                               </div>
-                            )}
-                            <div className="image-badge absolute left-3 top-3">{record.region}</div>
-                            <div className="image-badge alt absolute right-3 top-3">
-                              {record.soldDate
-                                ? "已卖出"
-                                : isFrozenPsPlusRecord(record, settings.psPlusEnabled)
-                                  ? "会员冻结"
-                                  : record.format}
-                            </div>
-                          </div>
-                          <div className="flex flex-1 flex-col gap-3 p-3 sm:p-4">
-                            <div>
-                              <h3 className="line-clamp-2 min-h-12 text-lg font-semibold leading-6">
-                                {isSafeOfficialUrl(record.officialUrl) ? (
-                                  <a href={record.officialUrl} target="_blank" rel="noreferrer">
-                                    {record.title}
-                                  </a>
-                                ) : (
-                                  record.title
-                                )}
-                              </h3>
-                              <p className="mt-1 text-sm text-base-content/60">
-                                {record.purchaseDate} · {record.format}
-                                {record.seller ? ` · ${record.seller}` : ""}
-                              </p>
-                            </div>
-                            <div className="mt-auto grid gap-3 border-t border-base-300 pt-3">
-                              <div className="grid min-h-[4.6rem] grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
-                                <div className="min-w-0">
-                                  <p className="text-xs font-semibold text-base-content/60">买入</p>
-                                  <span className="text-2xl font-bold text-primary">
-                                    {formatMoney(record.price, record.currency)}
+                              {record.soldDate ? (
+                                <div className="min-w-0 text-right">
+                                  <p className="text-xs font-semibold text-success">
+                                    {record.soldDate} 卖出
+                                  </p>
+                                  <span className="text-lg font-bold text-success">
+                                    {formatMoney(record.soldPrice, record.soldCurrency)}
                                   </span>
-                                  {record.currency !== "CNY" ? (
+                                  {record.soldCurrency !== "CNY" ? (
                                     <p className="mt-0.5 text-xs font-semibold leading-4 text-base-content/60">
                                       {formatCnyConversion(
-                                        record.price,
-                                        record.currency,
+                                        record.soldPrice,
+                                        record.soldCurrency,
                                         exchangeRates,
                                       )}
                                     </p>
                                   ) : null}
                                 </div>
-                                {record.soldDate ? (
-                                  <div className="min-w-0 text-right">
-                                    <p className="text-xs font-semibold text-success">
-                                      {record.soldDate} 卖出
-                                    </p>
-                                    <span className="text-lg font-bold text-success">
-                                      {formatMoney(record.soldPrice, record.soldCurrency)}
-                                    </span>
-                                    {record.soldCurrency !== "CNY" ? (
-                                      <p className="mt-0.5 text-xs font-semibold leading-4 text-base-content/60">
-                                        {formatCnyConversion(
-                                          record.soldPrice,
-                                          record.soldCurrency,
-                                          exchangeRates,
-                                        )}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                              </div>
-                              {accessStatus === "unlocked" ? (
-                                <div
-                                  className={`grid gap-2 ${
-                                    isPhysicalFormat(record.format) && !record.soldDate
-                                      ? "grid-cols-3"
-                                      : "grid-cols-2"
-                                  }`}
-                                >
-                                  {isPhysicalFormat(record.format) && !record.soldDate ? (
-                                    <button
-                                      className="secondary-button min-w-0 px-2"
-                                      type="button"
-                                      onClick={() => startSaleRecord(record)}
-                                    >
-                                      记录卖出
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    className="ghost-button min-w-0 px-2"
-                                    type="button"
-                                    onClick={() => editRecord(record)}
-                                  >
-                                    编辑
-                                  </button>
-                                  <button
-                                    className="danger-button min-w-0 px-2"
-                                    type="button"
-                                    onClick={() => requestDeleteRecord(record)}
-                                  >
-                                    删除
-                                  </button>
-                                </div>
                               ) : null}
                             </div>
-                            {record.notes ? (
-                              <p className="rounded-xl bg-base-200 px-3 py-2 text-sm text-base-content/70">
-                                {record.notes}
-                              </p>
+                            {accessStatus === "unlocked" ? (
+                              <div
+                                className={`grid gap-2 ${
+                                  isPhysicalFormat(record.format) && !record.soldDate
+                                    ? "grid-cols-3"
+                                    : "grid-cols-2"
+                                }`}
+                              >
+                                {isPhysicalFormat(record.format) && !record.soldDate ? (
+                                  <button
+                                    className="secondary-button min-w-0 px-2"
+                                    type="button"
+                                    onClick={() => startSaleRecord(record)}
+                                  >
+                                    记录卖出
+                                  </button>
+                                ) : null}
+                                <button
+                                  className="ghost-button min-w-0 px-2"
+                                  type="button"
+                                  onClick={() => editRecord(record)}
+                                >
+                                  编辑
+                                </button>
+                                <button
+                                  className="danger-button min-w-0 px-2"
+                                  type="button"
+                                  onClick={() => deleteRecord(record.id)}
+                                >
+                                  删除
+                                </button>
+                              </div>
                             ) : null}
                           </div>
-                        </article>
-                      ) : (
-                        <article
-                          key={record.id}
-                          className={`record-list-row${record.soldDate || isFrozenPsPlusRecord(record, settings.psPlusEnabled) ? " sold-record" : ""}`}
-                        >
-                          <div className="record-list-cover bg-primary">
-                            {record.coverUrl ? (
-                              <img
-                                src={record.coverUrl}
-                                alt={`${record.title}封面`}
-                                loading="lazy"
-                                decoding="async"
-                              />
-                            ) : (
-                              <span>
-                                {coverLabel(record.title) ||
-                                  (record.platform === "PlayStation" ? "PS" : "NS")}
-                              </span>
-                            )}
-                          </div>
-                          <div className="record-list-main">
-                            <div className="min-w-0">
-                              <h3 title={record.title}>
-                                {isSafeOfficialUrl(record.officialUrl) ? (
-                                  <a href={record.officialUrl} target="_blank" rel="noreferrer">
-                                    {record.title}
-                                  </a>
-                                ) : (
-                                  record.title
-                                )}
-                              </h3>
-                              <p>
-                                {record.purchaseDate} · {record.region} · {record.format}
-                                {record.seller ? ` · ${record.seller}` : ""}
-                              </p>
-                              {record.notes ? (
-                                <p className="record-list-notes">{record.notes}</p>
-                              ) : null}
-                            </div>
-                            <div className="record-list-price">
-                              <span>买入</span>
-                              <strong>{formatMoney(record.price, record.currency)}</strong>
-                              {record.currency !== "CNY" ? (
-                                <small>
-                                  {formatCnyConversion(
-                                    record.price,
-                                    record.currency,
-                                    exchangeRates,
-                                  )}
-                                </small>
-                              ) : null}
-                            </div>
-                            <div className="record-list-status">
-                              <span
-                                className={
-                                  record.soldDate
-                                    ? "sold"
-                                    : isFrozenPsPlusRecord(record, settings.psPlusEnabled)
-                                      ? "frozen"
-                                      : ""
-                                }
-                              >
-                                {record.soldDate
-                                  ? "已卖出"
-                                  : isFrozenPsPlusRecord(record, settings.psPlusEnabled)
-                                    ? "会员冻结"
-                                    : "持有中"}
-                              </span>
-                              {record.soldDate ? (
-                                <strong>
-                                  {formatMoney(record.soldPrice, record.soldCurrency)}
-                                </strong>
-                              ) : null}
-                            </div>
-                          </div>
-                          {accessStatus === "unlocked" ? (
-                            <div className="record-list-actions">
-                              {isPhysicalFormat(record.format) && !record.soldDate ? (
-                                <button
-                                  className="secondary-button"
-                                  type="button"
-                                  onClick={() => startSaleRecord(record)}
-                                >
-                                  记录卖出
-                                </button>
-                              ) : null}
-                              <button
-                                className="ghost-button"
-                                type="button"
-                                onClick={() => editRecord(record)}
-                              >
-                                编辑
-                              </button>
-                              <button
-                                className="danger-button"
-                                type="button"
-                                onClick={() => requestDeleteRecord(record)}
-                              >
-                                删除
-                              </button>
-                            </div>
-                          ) : null}
-                        </article>
-                      ),
-                    )}
-                  </div>
-
-                  {!filteredRecords.length ? (
-                    <div className="empty-state p-10 text-center">这个平台暂无匹配记录</div>
-                  ) : null}
-
-                  {shareOpen && accessStatus === "unlocked" ? (
-                    <div
-                      className="share-dialog-backdrop"
-                      role="presentation"
-                      onMouseDown={closeSharePanel}
-                    >
-                      <section
-                        ref={shareDialogRef}
-                        className="share-dialog"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="share-dialog-title"
-                        tabIndex={-1}
-                        onMouseDown={(event) => event.stopPropagation()}
-                      >
-                        <div className="share-dialog-header">
-                          <div>
-                            <h2 id="share-dialog-title">分享我的游戏收藏</h2>
-                            <p>
-                              {shareRecordIds.length > maxShareImageRecords
-                                ? `已选择 ${shareRecordIds.length} 款，本图展示前 ${maxShareImageRecords} 款`
-                                : `已选择 ${shareRecordIds.length} / ${records.length} 款游戏`}
+                          {record.notes ? (
+                            <p className="rounded-xl bg-base-200 px-3 py-2 text-sm text-base-content/70">
+                              {record.notes}
                             </p>
-                          </div>
-                          <button className="ghost-button" type="button" onClick={closeSharePanel}>
-                            关闭
-                          </button>
+                          ) : null}
                         </div>
-                        <div className="share-options">
-                          {[
-                            ["showPrice", "买入价格"],
-                            ["showSale", "卖出信息"],
-                            ["showDate", "购买日期"],
-                            ["showNotes", "备注"],
-                          ].map(([key, label]) => (
-                            <label key={key} className="checkbox-field">
-                              <input
-                                type="checkbox"
-                                checked={shareOptions[key as keyof ShareOptions]}
-                                onChange={(event) => {
-                                  setShareOptions((current) => ({
-                                    ...current,
-                                    [key]: event.target.checked,
-                                  }));
-                                  if (shareImageUrl) URL.revokeObjectURL(shareImageUrl);
-                                  setShareImageUrl("");
-                                }}
-                              />
-                              <span>{label}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="share-record-picker">
-                          <div className="share-record-picker-header">
-                            <strong>选择要分享的游戏</strong>
-                            <div>
-                              <select
-                                className="share-platform-filter"
-                                value={sharePlatformFilter}
-                                aria-label="按平台筛选游戏"
-                                onChange={(event) =>
-                                  setSharePlatformFilter(event.target.value as "all" | GamePlatform)
-                                }
-                              >
-                                <option value="all">全部平台</option>
-                                <option value="Nintendo Switch">NS</option>
-                                <option value="PlayStation">PS</option>
-                              </select>
-                              <button
-                                className="ghost-button"
-                                type="button"
-                                onClick={() =>
-                                  setShareRecordIds((current) => [
-                                    ...new Set([
-                                      ...current,
-                                      ...shareVisibleRecords.map((record) => record.id),
-                                    ]),
-                                  ])
-                                }
-                              >
-                                全选当前
-                              </button>
-                              <button
-                                className="ghost-button"
-                                type="button"
-                                onClick={() => setShareRecordIds([])}
-                              >
-                                清空
-                              </button>
-                            </div>
-                          </div>
-                          <div className="share-record-list">
-                            {shareVisibleRecords.map((record) => (
-                              <label key={record.id} className="share-record-item">
-                                <input
-                                  type="checkbox"
-                                  checked={shareRecordIds.includes(record.id)}
-                                  onChange={(event) =>
-                                    (() => {
-                                      setShareRecordIds((current) =>
-                                        event.target.checked
-                                          ? [...current, record.id]
-                                          : current.filter((id) => id !== record.id),
-                                      );
-                                      if (shareImageUrl) URL.revokeObjectURL(shareImageUrl);
-                                      setShareImageUrl("");
-                                    })()
-                                  }
-                                />
-                                <span>{record.title}</span>
-                                <small>{record.platform === "PlayStation" ? "PS" : "NS"}</small>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="share-preview">
-                          {shareImageUrl ? (
-                            <img src={shareImageUrl} alt="游戏收藏分享图预览" />
+                      </article>
+                    ) : (
+                      <article key={record.id} className="record-list-row">
+                        <div className="record-list-cover bg-primary">
+                          {record.coverUrl ? (
+                            <img
+                              src={record.coverUrl}
+                              alt={`${record.title}封面`}
+                              loading="lazy"
+                              decoding="async"
+                            />
                           ) : (
-                            <div>
-                              <strong>
-                                {shareStatus === "generating" ? "正在生成" : "预览尚未生成"}
-                              </strong>
-                              {shareStatus === "error" ? (
-                                <span>部分封面可能暂时无法读取，请重试</span>
-                              ) : null}
-                            </div>
+                            <span>
+                              {coverLabel(record.title) ||
+                                (record.platform === "PlayStation" ? "PS" : "NS")}
+                            </span>
                           )}
                         </div>
-                        <div className="share-dialog-actions">
-                          <button
-                            className="ghost-button"
-                            type="button"
-                            disabled={shareStatus === "generating" || !shareRecordIds.length}
-                            onClick={generateShareImage}
-                          >
-                            {shareStatus === "generating" ? "生成中" : "生成预览"}
-                          </button>
-                          <button
-                            className="primary-button"
-                            type="button"
-                            disabled={shareStatus === "generating" || !shareRecordIds.length}
-                            onClick={shareLibraryImage}
-                          >
-                            分享或下载图片
-                          </button>
-                        </div>
-                      </section>
-                    </div>
-                  ) : null}
-
-                  {recognizeOpen && accessStatus === "unlocked" ? (
-                    <div
-                      className="share-dialog-backdrop"
-                      role="presentation"
-                      onMouseDown={() => setRecognizeOpen(false)}
-                    >
-                      <section
-                        ref={recognizeDialogRef}
-                        className="share-dialog purchase-recognition-dialog"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="recognize-title"
-                        tabIndex={-1}
-                        onMouseDown={(event) => event.stopPropagation()}
-                      >
-                        <div className="share-dialog-header">
-                          <div>
-                            <h2 id="recognize-title">识别购买图片</h2>
-                            <p>上传订单或交易截图，识别后请确认字段再加入记录</p>
+                        <div className="record-list-main">
+                          <div className="min-w-0">
+                            <h3 title={record.title}>{record.title}</h3>
+                            <p>
+                              {record.purchaseDate} · {record.region} · {record.format}
+                              {record.seller ? ` · ${record.seller}` : ""}
+                            </p>
+                            {playSummaries[record.id] ? (
+                              <p className="record-play-summary">
+                                {purchasePlayLabel(playSummaries[record.id])}
+                              </p>
+                            ) : null}
+                            {record.notes ? (
+                              <p className="record-list-notes">{record.notes}</p>
+                            ) : null}
                           </div>
-                          <button
-                            className="ghost-button"
-                            type="button"
-                            onClick={() => setRecognizeOpen(false)}
-                          >
-                            关闭
-                          </button>
-                        </div>
-
-                        <button
-                          className="purchase-upload-zone"
-                          type="button"
-                          onClick={() => purchaseImageInputRef.current?.click()}
-                        >
-                          <strong>
-                            {recognizeFiles.length
-                              ? `已选择 ${recognizeFiles.length} 张图片`
-                              : "选择购买截图"}
-                          </strong>
-                          <span>JPG、PNG 或 WebP，最多 6 张，单张不超过 12MB</span>
-                        </button>
-                        <input
-                          ref={purchaseImageInputRef}
-                          className="hidden"
-                          type="file"
-                          multiple
-                          accept="image/jpeg,image/png,image/webp"
-                          onChange={(event) => {
-                            setRecognizeFiles(Array.from(event.target.files || []).slice(0, 6));
-                            setRecognizedGames([]);
-                            setRecognizeError("");
-                            event.target.value = "";
-                          }}
-                        />
-                        {recognizeFiles.length ? (
-                          <div className="purchase-file-list">
-                            {recognizeFiles.map((file) => (
-                              <span key={`${file.name}-${file.size}`}>{file.name}</span>
-                            ))}
+                          <div className="record-list-price">
+                            <span>买入</span>
+                            <strong>{formatMoney(record.price, record.currency)}</strong>
+                            {record.currency !== "CNY" ? (
+                              <small>
+                                {formatCnyConversion(record.price, record.currency, exchangeRates)}
+                              </small>
+                            ) : null}
                           </div>
-                        ) : null}
-                        {!recognizedGames.length ? (
-                          <button
-                            className="primary-button"
-                            type="button"
-                            disabled={!recognizeFiles.length || recognizeStatus === "recognizing"}
-                            onClick={recognizePurchaseImages}
-                          >
-                            {recognizeStatus === "recognizing" ? "AI 识别中" : "开始识别"}
-                          </button>
-                        ) : null}
-                        {recognizeError ? (
-                          <p className="alert alert-warning py-2 text-sm font-semibold">
-                            {recognizeError}
-                          </p>
-                        ) : null}
-
-                        {recognizedGames.length ? (
-                          <div className="recognized-games">
-                            {recognizedGames.map((game, index) => (
-                              <article className="recognized-game" key={index}>
-                                <div className="recognized-game-summary">
-                                  <div>
-                                    <strong>{game.title}</strong>
-                                    <span>
-                                      {game.platform} · {game.region} · {game.format}
-                                    </span>
-                                  </div>
-                                  <span>置信度 {Math.round(game.confidence * 100)}%</span>
-                                </div>
-                                <div className="recognized-game-meta">
-                                  <span>
-                                    {game.currency} {game.price}
-                                  </span>
-                                  <span>{game.purchaseDate || "未识别购买日期"}</span>
-                                  <span>{game.seller || "未识别购买平台 / 店铺"}</span>
-                                </div>
-                                {game.warning ? (
-                                  <p className="recognized-warning">请核实：{game.warning}</p>
-                                ) : null}
-                                <button
-                                  className="primary-button recognized-game-action"
-                                  type="button"
-                                  onClick={() => openRecognizedGameInForm(game, index)}
-                                >
-                                  在新增游戏中编辑并匹配官网
-                                </button>
-                              </article>
-                            ))}
-                            <div className="share-dialog-actions">
+                          <div className="record-list-status">
+                            <span className={record.soldDate ? "sold" : ""}>
+                              {record.soldDate ? "已卖出" : "持有中"}
+                            </span>
+                            {record.soldDate ? (
+                              <strong>{formatMoney(record.soldPrice, record.soldCurrency)}</strong>
+                            ) : null}
+                          </div>
+                        </div>
+                        {accessStatus === "unlocked" ? (
+                          <div className="record-list-actions">
+                            {isPhysicalFormat(record.format) && !record.soldDate ? (
                               <button
-                                className="ghost-button"
+                                className="secondary-button"
                                 type="button"
-                                onClick={recognizePurchaseImages}
+                                onClick={() => startSaleRecord(record)}
                               >
-                                重新识别
+                                记录卖出
                               </button>
-                            </div>
+                            ) : null}
+                            <button
+                              className="ghost-button"
+                              type="button"
+                              onClick={() => editRecord(record)}
+                            >
+                              编辑
+                            </button>
+                            <button
+                              className="danger-button"
+                              type="button"
+                              onClick={() => deleteRecord(record.id)}
+                            >
+                              删除
+                            </button>
                           </div>
                         ) : null}
-                      </section>
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
+                      </article>
+                    ),
+                  )}
+                </div>
 
-              <ConfirmationDialog
-                open={Boolean(pendingDeleteRecord)}
-                title="删除游戏记录？"
-                description={
-                  pendingDeleteRecord
-                    ? `将永久删除“${pendingDeleteRecord.title}”及其价格、日期和备注，此操作无法撤销。`
-                    : ""
-                }
-                onCancel={() => setPendingDeleteRecord(null)}
-                onConfirm={confirmDeleteRecord}
-              />
+                {!filteredRecords.length ? (
+                  <div className="empty-state p-10 text-center">
+                    {activePlatform === "Nintendo Switch" && unlinkedHistoryGames.length
+                      ? "尚未填写收藏资料；可以从上方历史游戏开始完善。"
+                      : "这个平台暂无匹配记录"}
+                  </div>
+                ) : null}
 
-              {authPanelOpen && !pendingPasswordRecovery ? (
-                <div
-                  className="share-dialog-backdrop"
-                  role="presentation"
-                  onMouseDown={requestCloseAuthPanel}
-                >
-                  <form
-                    ref={authDialogRef}
-                    className="login-card grid w-full max-w-md gap-4 p-5 sm:p-6"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="auth-dialog-title"
-                    tabIndex={-1}
-                    onSubmit={submitPassword}
-                    onMouseDown={(event) => event.stopPropagation()}
+                {shareOpen && accessStatus === "unlocked" ? (
+                  <div
+                    className="share-dialog-backdrop"
+                    role="presentation"
+                    onMouseDown={closeSharePanel}
                   >
-                    <div>
-                      <p className="ledger-kicker">
-                        {registrationOpen
-                          ? "首次使用"
-                          : passwordChangeRequired
-                            ? "安全验证"
-                            : "管理员登录"}
-                      </p>
-                      <h2 id="auth-dialog-title" className="mt-1 text-2xl font-bold">
-                        {registrationOpen
-                          ? "注册管理员账号"
-                          : passwordChangeRequired
-                            ? "请设置新密码"
-                            : "登录 GameNote"}
-                      </h2>
-                    </div>
-                    {passwordChangeRequired ? (
-                      <>
-                        <p className="alert alert-warning py-2 text-sm font-semibold">
-                          当前使用的是临时密码。设置新密码后才能继续管理收藏。
-                        </p>
-                        <label className="field">
-                          <span>新密码</span>
-                          <input
-                            autoComplete="new-password"
-                            type="password"
-                            value={forcedNewPassword}
-                            onChange={(event) => setForcedNewPassword(event.target.value)}
-                            placeholder="8-128 位"
-                          />
-                        </label>
-                        <label className="field">
-                          <span>确认新密码</span>
-                          <input
-                            autoComplete="new-password"
-                            type="password"
-                            value={forcedConfirmPassword}
-                            onChange={(event) => setForcedConfirmPassword(event.target.value)}
-                            placeholder="再次输入新密码"
-                          />
-                        </label>
-                      </>
-                    ) : (
-                      <>
-                        <label className="field">
-                          <span>账号</span>
-                          <input
-                            autoComplete="username"
-                            value={username}
-                            onChange={(event) => setUsername(event.target.value)}
-                            placeholder="3-32 位字母或数字"
-                          />
-                        </label>
-                        <label className="field">
-                          <span>密码</span>
-                          <input
-                            autoComplete={registrationOpen ? "new-password" : "current-password"}
-                            type="password"
-                            value={password}
-                            onChange={(event) => setPassword(event.target.value)}
-                            placeholder="至少 8 位"
-                          />
-                        </label>
-                      </>
-                    )}
-                    {passwordNotice ? (
-                      <p className="alert alert-success py-2 text-sm font-semibold" role="status">
-                        {passwordNotice}
-                      </p>
-                    ) : null}
-                    {passwordError ? (
-                      <p className="alert alert-warning py-2 text-sm font-semibold" role="alert">
-                        {passwordError}
-                      </p>
-                    ) : null}
-                    <div className={`grid gap-2${passwordChangeRequired ? "" : " grid-cols-2"}`}>
-                      {!passwordChangeRequired ? (
-                        <button className="ghost-button" type="button" onClick={closeAuthPanel}>
-                          取消
+                    <section
+                      ref={shareDialogRef}
+                      className="share-dialog"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="share-dialog-title"
+                      tabIndex={-1}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <div className="share-dialog-header">
+                        <div>
+                          <h2 id="share-dialog-title">分享我的游戏收藏</h2>
+                          <p>
+                            {records.length > maxShareImageRecords
+                              ? `共 ${records.length} 款，本图展示前 ${maxShareImageRecords} 款`
+                              : `将全部 ${records.length} 款游戏生成一张图片`}
+                          </p>
+                        </div>
+                        <button className="ghost-button" type="button" onClick={closeSharePanel}>
+                          关闭
+                        </button>
+                      </div>
+                      <div className="share-options">
+                        {[
+                          ["showPrice", "买入价格"],
+                          ["showSale", "卖出信息"],
+                          ["showDate", "购买日期"],
+                          ["showNotes", "备注"],
+                        ].map(([key, label]) => (
+                          <label key={key} className="checkbox-field">
+                            <input
+                              type="checkbox"
+                              checked={shareOptions[key as keyof ShareOptions]}
+                              onChange={(event) => {
+                                setShareOptions((current) => ({
+                                  ...current,
+                                  [key]: event.target.checked,
+                                }));
+                                if (shareImageUrl) URL.revokeObjectURL(shareImageUrl);
+                                setShareImageUrl("");
+                              }}
+                            />
+                            <span>{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="share-preview">
+                        {shareImageUrl ? (
+                          <img src={shareImageUrl} alt="游戏收藏分享图预览" />
+                        ) : (
+                          <div>
+                            <strong>
+                              {shareStatus === "generating" ? "正在生成" : "预览尚未生成"}
+                            </strong>
+                            {shareStatus === "error" ? (
+                              <span>部分封面可能暂时无法读取，请重试</span>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                      <div className="share-dialog-actions">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={shareStatus === "generating"}
+                          onClick={generateShareImage}
+                        >
+                          {shareStatus === "generating" ? "生成中" : "生成预览"}
+                        </button>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={shareStatus === "generating"}
+                          onClick={shareLibraryImage}
+                        >
+                          分享或下载图片
+                        </button>
+                      </div>
+                    </section>
+                  </div>
+                ) : null}
+
+                {recognizeOpen && accessStatus === "unlocked" ? (
+                  <div
+                    className="share-dialog-backdrop"
+                    role="presentation"
+                    onMouseDown={() => setRecognizeOpen(false)}
+                  >
+                    <section
+                      ref={recognizeDialogRef}
+                      className="share-dialog purchase-recognition-dialog"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="recognize-title"
+                      tabIndex={-1}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <div className="share-dialog-header">
+                        <div>
+                          <h2 id="recognize-title">识别购买图片</h2>
+                          <p>上传订单或交易截图，识别后请确认字段再加入记录</p>
+                        </div>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={() => setRecognizeOpen(false)}
+                        >
+                          关闭
+                        </button>
+                      </div>
+
+                      <button
+                        className="purchase-upload-zone"
+                        type="button"
+                        onClick={() => purchaseImageInputRef.current?.click()}
+                      >
+                        <strong>
+                          {recognizeFiles.length
+                            ? `已选择 ${recognizeFiles.length} 张图片`
+                            : "选择购买截图"}
+                        </strong>
+                        <span>JPG、PNG 或 WebP，最多 6 张，单张不超过 12MB</span>
+                      </button>
+                      <input
+                        ref={purchaseImageInputRef}
+                        className="hidden"
+                        type="file"
+                        multiple
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={(event) => {
+                          setRecognizeFiles(Array.from(event.target.files || []).slice(0, 6));
+                          setRecognizedGames([]);
+                          setRecognizeError("");
+                          event.target.value = "";
+                        }}
+                      />
+                      {recognizeFiles.length ? (
+                        <div className="purchase-file-list">
+                          {recognizeFiles.map((file) => (
+                            <span key={`${file.name}-${file.size}`}>{file.name}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {!recognizedGames.length ? (
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={!recognizeFiles.length || recognizeStatus === "recognizing"}
+                          onClick={recognizePurchaseImages}
+                        >
+                          {recognizeStatus === "recognizing" ? "AI 识别中" : "开始识别"}
                         </button>
                       ) : null}
-                      <button className="primary-button" type="submit">
-                        {registrationOpen
-                          ? "注册并登录"
-                          : passwordChangeRequired
-                            ? "保存新密码"
-                            : "登录"}
-                      </button>
-                    </div>
-                    {!registrationOpen && !passwordChangeRequired ? (
-                      <button
-                        className="auth-reset-link"
-                        type="button"
-                        onClick={requestPasswordRecovery}
-                      >
-                        重置密码
-                      </button>
-                    ) : null}
-                  </form>
-                </div>
-              ) : null}
+                      {recognizeError ? (
+                        <p className="alert alert-warning py-2 text-sm font-semibold">
+                          {recognizeError}
+                        </p>
+                      ) : null}
 
-              <ConfirmationDialog
-                open={pendingPasswordRecovery}
-                title="生成临时密码？"
-                description="当前密码和所有登录会话将立即失效。临时密码会写入数据目录下的 password 文件。"
-                confirmLabel="确认生成"
-                onCancel={() => setPendingPasswordRecovery(false)}
-                onConfirm={confirmPasswordRecovery}
-              />
-            </section>
-          ) : (
-            <section className="app-surface p-8 text-center text-sm font-semibold text-base-content/70">
-              {storageError || "正在加载记录"}
-            </section>
-          )}
-        </div>
+                      {recognizedGames.length ? (
+                        <div className="recognized-games">
+                          {recognizedGames.map((game, index) => (
+                            <article className="recognized-game" key={index}>
+                              <div className="recognized-game-summary">
+                                <div>
+                                  <strong>{game.title}</strong>
+                                  <span>
+                                    {game.platform} · {game.region} · {game.format}
+                                  </span>
+                                </div>
+                                <span>置信度 {Math.round(game.confidence * 100)}%</span>
+                              </div>
+                              <div className="recognized-game-meta">
+                                <span>
+                                  {game.currency} {game.price}
+                                </span>
+                                <span>{game.purchaseDate || "未识别购买日期"}</span>
+                                <span>{game.seller || "未识别购买平台 / 店铺"}</span>
+                              </div>
+                              {game.warning ? (
+                                <p className="recognized-warning">请核实：{game.warning}</p>
+                              ) : null}
+                              <button
+                                className="primary-button recognized-game-action"
+                                type="button"
+                                onClick={() => openRecognizedGameInForm(game, index)}
+                              >
+                                在新增游戏中编辑并匹配官网
+                              </button>
+                            </article>
+                          ))}
+                          <div className="share-dialog-actions">
+                            <button
+                              className="ghost-button"
+                              type="button"
+                              onClick={recognizePurchaseImages}
+                            >
+                              重新识别
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </section>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
-        <aside className="ledger-sidebar ledger-sidebar-right">
+            {authPanelOpen ? (
+              <div
+                className="share-dialog-backdrop"
+                role="presentation"
+                onMouseDown={() => setAuthPanelOpen(false)}
+              >
+                <form
+                  ref={authDialogRef}
+                  className="login-card grid w-full max-w-md gap-4 p-5 sm:p-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="auth-dialog-title"
+                  tabIndex={-1}
+                  onSubmit={submitPassword}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <div>
+                    <h2 id="auth-dialog-title" className="text-2xl font-bold">
+                      {registrationOpen ? "注册管理员账号" : "登录 GameNote"}
+                    </h2>
+                    <p className="mt-1 text-sm text-base-content/65">
+                      {registrationOpen ? "创建首个管理员账号" : "输入管理员账号继续"}
+                    </p>
+                  </div>
+                  <label className="field">
+                    <span>账号</span>
+                    <input
+                      autoComplete="username"
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      placeholder="3-32 位字母或数字"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>密码</span>
+                    <input
+                      autoComplete={registrationOpen ? "new-password" : "current-password"}
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="至少 8 位"
+                    />
+                  </label>
+                  {passwordError ? (
+                    <p className="alert alert-warning py-2 text-sm font-semibold" role="alert">
+                      {passwordError}
+                    </p>
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => setAuthPanelOpen(false)}
+                    >
+                      取消
+                    </button>
+                    <button className="primary-button" type="submit">
+                      {registrationOpen ? "注册并登录" : "登录"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : null}
+          </section>
+        ) : (
+          <section className="app-surface p-8 text-center text-sm font-semibold text-base-content/70">
+            {storageError || "正在加载记录"}
+          </section>
+        )}
+      </div>
+
+      <aside className="ledger-context-panel">
+        <section className="right-panel-section">
+          <h2>游戏库概览</h2>
+          <div className="right-stats-grid">
+            <Stat label="全部游戏" value={`${totalLibraryGames}`} />
+            <Stat label="当前平台" value={`${currentPlatformLibraryGames}`} />
+            <Stat label="已有收藏" value={`${statsRecords.length}`} />
+            <Stat label="待补资料" value={`${unlinkedNintendoHistoryGames.length}`} />
+            <Stat
+              label={`已卖出 ${soldCount ? `(${soldCount})` : ""}`}
+              value={formatCnyTotal(saleCnyStats.total, saleCnyStats.missingRates)}
+            />
+          </div>
+          <div className="sidebar-total">
+            <span>总支出 CNY</span>
+            <strong>{formatCnyTotal(purchaseCnyStats.total, purchaseCnyStats.missingRates)}</strong>
+            <small>
+              {statsLibraryLabel} ·{" "}
+              {exchangeRates?.date ? `汇率 ${exchangeRates.date}` : "汇率更新中"}
+            </small>
+          </div>
+          {exchangeError ? <p className="sidebar-error">{exchangeError}</p> : null}
+        </section>
+        {accessStatus === "unlocked" && dashboardStats?.play ? (
           <section className="right-panel-section">
-            <h2>收藏概览</h2>
+            <h2>游玩概览</h2>
             <div className="right-stats-grid">
-              <Stat label="全部游戏" value={`${statsRecords.length}`} />
-              <Stat label="当前平台" value={`${platformRecords.length}`} />
-              <Stat label="实体 / 数字" value={`${physicalCount} / ${digitalCount}`} />
+              <Stat label="有记录游戏" value={`${dashboardStats.play.games}`} />
               <Stat
-                label={`已卖出 ${soldCount ? `(${soldCount})` : ""}`}
-                value={formatCnyTotal(saleCnyStats.total, saleCnyStats.missingRates)}
+                label="数据形式"
+                value={
+                  dashboardStats.play.timeSemantics === "daily_aggregate"
+                    ? "每日汇总"
+                    : dashboardStats.play.timeSemantics === "mixed"
+                      ? "多来源"
+                      : "会话记录"
+                }
               />
+              <Stat label="已关联收藏" value={`${dashboardStats.purchases.linked}`} />
+              <Stat label="待补收藏资料" value={`${unlinkedNintendoHistoryGames.length}`} />
             </div>
             <div className="sidebar-total">
-              <span>总支出 CNY</span>
-              <strong>
-                {formatCnyTotal(purchaseCnyStats.total, purchaseCnyStats.missingRates)}
-              </strong>
+              <span>已记录游玩时长</span>
+              <strong>{formatPlayDuration(dashboardStats.play.totalSeconds)}</strong>
               <small>
-                {statsLibraryLabel} ·{" "}
-                {exchangeRates?.date ? `汇率 ${exchangeRates.date}` : "汇率更新中"}
+                {dashboardStats.play.lastPlayedAt
+                  ? `最近记录 ${formatPlayDate(dashboardStats.play.lastPlayedAt)}`
+                  : "暂无游玩记录"}
               </small>
+              {dashboardStats.play.timeSemantics === "daily_aggregate" ||
+              dashboardStats.play.timeSemantics === "mixed" ? (
+                <small>已关联收藏优先统计 Moon 日报，不叠加其他来源时长。</small>
+              ) : null}
             </div>
-            {exchangeError ? <p className="sidebar-error">{exchangeError}</p> : null}
           </section>
-          {accessStatus === "unlocked" ? (
-            <section className="right-panel-section">
-              <h2>快捷操作</h2>
-              <div className="sidebar-tools">
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => {
-                    resetForm();
-                    setActiveView("form");
-                  }}
-                >
-                  新增游戏
+        ) : null}
+        {accessStatus === "unlocked" ? (
+          <section className="right-panel-section">
+            <h2>快捷操作</h2>
+            <div className="sidebar-tools">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setActiveView("form");
+                }}
+              >
+                新增游戏
+              </button>
+              {settings.aiApiKeyConfigured ? (
+                <button className="ghost-button" type="button" onClick={openPurchaseRecognition}>
+                  识别购买图
                 </button>
-                {settings.aiApiKeyConfigured ? (
-                  <button className="ghost-button" type="button" onClick={openPurchaseRecognition}>
-                    识别购买图
-                  </button>
-                ) : null}
-                <button
-                  className="ghost-button"
-                  type="button"
-                  disabled={!records.length}
-                  onClick={() => {
-                    setShareRecordIds(records.map((record) => record.id));
-                    setSharePlatformFilter("all");
-                    setShareOpen(true);
-                  }}
-                >
-                  分享游戏库
-                </button>
-              </div>
-            </section>
-          ) : null}
-        </aside>
-      </div>
-    </main>
+              ) : null}
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={!records.length}
+                onClick={() => setShareOpen(true)}
+              >
+                分享游戏库
+              </button>
+            </div>
+          </section>
+        ) : null}
+      </aside>
+    </section>
   );
+}
+
+function LibraryControlIcon({
+  name,
+}: {
+  name: "search" | "grid" | "list" | "clock" | "price" | "title" | "chevron" | "check";
+}) {
+  const common = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 1.8,
+  };
+
+  return (
+    <svg aria-hidden="true" className="library-control-icon" viewBox="0 0 24 24" {...common}>
+      {name === "search" ? (
+        <>
+          <circle cx="10.7" cy="10.7" r="6.2" />
+          <path d="m15.4 15.4 4.1 4.1" />
+        </>
+      ) : null}
+      {name === "grid" ? (
+        <>
+          <rect x="4" y="4" width="6" height="6" rx="1.4" />
+          <rect x="14" y="4" width="6" height="6" rx="1.4" />
+          <rect x="4" y="14" width="6" height="6" rx="1.4" />
+          <rect x="14" y="14" width="6" height="6" rx="1.4" />
+        </>
+      ) : null}
+      {name === "list" ? (
+        <>
+          <path d="M8.5 6h11M8.5 12h11M8.5 18h11" />
+          <circle cx="4.5" cy="6" r="0.75" fill="currentColor" stroke="none" />
+          <circle cx="4.5" cy="12" r="0.75" fill="currentColor" stroke="none" />
+          <circle cx="4.5" cy="18" r="0.75" fill="currentColor" stroke="none" />
+        </>
+      ) : null}
+      {name === "clock" ? (
+        <>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 7.7V12l3 1.8" />
+        </>
+      ) : null}
+      {name === "price" ? (
+        <>
+          <path d="M12 3.8v16.4M15.7 7.2c-.8-.9-2-1.4-3.7-1.4-2.1 0-3.7 1.1-3.7 2.8 0 4.5 7.6 1.7 7.6 6.1 0 2-1.8 3.4-4.2 3.4-1.7 0-3.2-.6-4.2-1.8" />
+        </>
+      ) : null}
+      {name === "title" ? (
+        <>
+          <path d="M5 6h14M9 6v12M6.5 18h5" />
+          <path d="M14.5 11h4.5M16.75 11v7M14.5 18H19" />
+        </>
+      ) : null}
+      {name === "chevron" ? <path d="m8.5 10 3.5 3.5 3.5-3.5" /> : null}
+      {name === "check" ? <path d="m5.5 12.5 4 4 9-9" /> : null}
+    </svg>
+  );
+}
+
+function formatPlayDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`;
+}
+function formatPlayDate(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return `${Number(value.slice(5, 7))}月${Number(value.slice(8, 10))}日`;
+  return value
+    ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value))
+    : "—";
+}
+
+function purchasePlayLabel(summary: PurchasePlaySummary) {
+  const time = formatPlayDuration(summary.totalSeconds);
+  if (summary.timeSemantics === "daily_aggregate")
+    return `已关联 · Moon 已记录 ${time} · ${formatPlayDate(summary.firstPlayedAt)} — ${formatPlayDate(summary.lastPlayedAt)}`;
+  if (summary.timeSemantics === "snapshot_observation")
+    return `已关联 · Nintendo 累计 ${time} · 观测于 ${formatPlayDate(summary.lastPlayedAt)}`;
+  return `已关联 · ${time} · 最近记录 ${formatPlayDate(summary.lastPlayedAt)}`;
+}
+
+function historyGamePlayLabel(game: LibraryPlayGame) {
+  const time = formatPlayDuration(game.totalSeconds);
+  if (game.timeSemantics === "daily_aggregate")
+    return `Moon 日报 ${time} · 最近 ${formatPlayDate(game.lastPlayedAt)}`;
+  if (game.timeSemantics === "snapshot_observation")
+    return `Nintendo 累计 ${time} · 最近观测 ${formatPlayDate(game.lastPlayedAt)}`;
+  return `${time} · 最近游玩 ${formatPlayDate(game.lastPlayedAt)}`;
 }

@@ -3,13 +3,10 @@ import { accessCookieName, getAccessIdentity } from "@/lib/auth/access";
 import {
   getRegisteredUser,
   readAppSettings,
-  normalizeAppSettings,
-  normalizeMembershipPeriods,
   updateRegisteredUserPassword,
   writeAppSettings,
 } from "@/lib/ledger/repository";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import { removePasswordRecoveryFile } from "@/lib/auth/password-recovery";
 import { isAccessibleThemeColor } from "@/lib/ui/theme-color";
 
 export const runtime = "nodejs";
@@ -28,17 +25,16 @@ export async function GET(request: NextRequest) {
     showPlayStation: settings.showPlayStation,
     showPsPlusCatalog: settings.showPsPlusCatalog,
     showMemberships: settings.showMemberships,
-    psPlusEnabled: settings.psPlusEnabled,
     ...(identity
       ? {
           aiBaseUrl: settings.aiBaseUrl,
           aiModel: settings.aiModel,
           aiApiKeyConfigured: Boolean(settings.aiApiKey),
+          psPlusEnabled: settings.psPlusEnabled,
           psPlusExpiresAt: settings.psPlusExpiresAt,
           psPlusAutoAddMonthly: settings.psPlusAutoAddMonthly,
           nsOnlineEnabled: settings.nsOnlineEnabled,
           nsOnlineExpiresAt: settings.nsOnlineExpiresAt,
-          membershipPeriods: settings.membershipPeriods,
         }
       : {}),
   });
@@ -66,10 +62,11 @@ export async function PUT(request: NextRequest) {
     typeof payload.showPlayStation === "boolean"
       ? payload.showPlayStation
       : current.showPlayStation;
-  const showPsPlusCatalog =
+  const requestedShowPsPlusCatalog =
     typeof payload.showPsPlusCatalog === "boolean"
       ? payload.showPsPlusCatalog
       : current.showPsPlusCatalog;
+  const showPsPlusCatalog = showPlayStation && requestedShowPsPlusCatalog;
   const showMemberships =
     typeof payload.showMemberships === "boolean"
       ? payload.showMemberships
@@ -99,11 +96,6 @@ export async function PUT(request: NextRequest) {
     typeof payload.nsOnlineExpiresAt === "string"
       ? payload.nsOnlineExpiresAt.trim()
       : current.nsOnlineExpiresAt;
-  const membershipPeriods = normalizeMembershipPeriods(
-    Array.isArray(payload.membershipPeriods)
-      ? payload.membershipPeriods
-      : current.membershipPeriods,
-  );
   if (typeof payload.aiApiKey === "string" && payload.aiApiKey.trim())
     aiApiKey = payload.aiApiKey.trim();
   if (payload.clearAiApiKey === true) aiApiKey = "";
@@ -123,7 +115,7 @@ export async function PUT(request: NextRequest) {
       { error: "主题色与白色背景对比度不足，请选择更深的颜色" },
       { status: 400 },
     );
-  const updatedSettings = normalizeAppSettings({
+  await writeAppSettings({
     siteTitle,
     avatarUrl,
     themeColor,
@@ -139,13 +131,23 @@ export async function PUT(request: NextRequest) {
     psPlusAutoAddMonthly,
     nsOnlineEnabled,
     nsOnlineExpiresAt,
-    membershipPeriods,
   });
-  await writeAppSettings(updatedSettings);
   return NextResponse.json({
-    ...updatedSettings,
+    siteTitle,
+    avatarUrl,
+    themeColor,
+    showNintendoSwitch,
+    showPlayStation,
+    showPsPlusCatalog,
+    showMemberships,
+    aiBaseUrl,
+    aiModel,
     aiApiKeyConfigured: Boolean(aiApiKey),
-    aiApiKey: undefined,
+    psPlusEnabled,
+    psPlusExpiresAt,
+    psPlusAutoAddMonthly,
+    nsOnlineEnabled,
+    nsOnlineExpiresAt,
   });
 }
 
@@ -174,7 +176,6 @@ export async function PATCH(request: NextRequest) {
   if (newPassword.length < 8 || newPassword.length > 128)
     return NextResponse.json({ error: "新密码需为 8-128 位" }, { status: 400 });
   await updateRegisteredUserPassword(await hashPassword(newPassword));
-  await removePasswordRecoveryFile().catch((error) => console.error("删除临时密码文件失败", error));
   const response = NextResponse.json({ updated: true, signedOut: true });
   response.cookies.set(accessCookieName, "", {
     httpOnly: true,

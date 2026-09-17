@@ -1,12 +1,19 @@
 {
-  "name": "gamenote",
-  "version": "1.0.14",
+  "name": "switch-cartridge-ledger",
+  "version": "0.1.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
+    "build": "next build --webpack",
     "build:docker": "next build --webpack",
+    "local:doctor": "node scripts/local-runtime.mjs doctor",
+    "local:up": "node scripts/local-runtime.mjs up",
+    "local:status": "node scripts/local-runtime.mjs status",
+    "local:down": "node scripts/local-runtime.mjs down",
+    "migrate:play": "node scripts/migrate-play-history.mjs",
+    "backup:ns2": "node scripts/ns2-backup.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
@@ -18,7 +25,8 @@
     "next": "16.3.2",
     "opencc-js": "^1.4.1",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "server-only": "0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.2.1",

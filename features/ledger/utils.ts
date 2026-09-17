@@ -65,15 +65,6 @@ export function officialUrlPlaceholder(platform: GamePlatform) {
     : "https://www.nintendo.com/...";
 }
 
-export function isSafeOfficialUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
 export function convertToCny(
   amount: number,
   currency: Currency,
@@ -346,7 +337,7 @@ export function createEmptyForm(platform: GamePlatform = "Nintendo Switch"): For
   };
 }
 export function platformPath(platform: GamePlatform) {
-  return platform === "PlayStation" ? "/playstation" : "/nintendo-switch";
+  return platform === "PlayStation" ? "/playstation" : "/";
 }
 export function platformFromPath(pathname: string): GamePlatform | null {
   if (pathname.startsWith("/memberships")) return "Nintendo Switch";

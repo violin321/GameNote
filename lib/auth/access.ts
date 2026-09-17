@@ -22,21 +22,6 @@ export function getJwtSecret() {
 }
 
 export async function getAccessIdentity(request: NextRequest) {
-  const session = await getValidatedAccessSession(request);
-  if (!session || session.user.passwordChangeRequired) return null;
-  return session.identity;
-}
-
-export async function getSignedInIdentity(request: NextRequest) {
-  return (await getValidatedAccessSession(request))?.identity ?? null;
-}
-
-export async function getPasswordChangeIdentity(request: NextRequest) {
-  const session = await getValidatedAccessSession(request);
-  return session?.user.passwordChangeRequired ? session.identity : null;
-}
-
-async function getValidatedAccessSession(request: NextRequest) {
   const cookie = request.cookies.get(accessCookieName)?.value ?? "";
   const identity = await verifyAccessSessionToken(cookie, getJwtSecret());
   if (!identity) return null;
@@ -48,7 +33,7 @@ async function getValidatedAccessSession(request: NextRequest) {
     user.sessionVersion !== identity.sessionVersion
   )
     return null;
-  return { identity, user };
+  return identity;
 }
 
 export async function hasValidAccessCookie(request: NextRequest) {

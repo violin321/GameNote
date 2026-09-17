@@ -33,7 +33,7 @@ export function PsPlusCatalogPage({
   return (
     <section className="catalog-page">
       <div className="catalog-toolbar">
-        <label className="field catalog-search-field">
+        <label className="field">
           <span>搜索游戏</span>
           <input
             value={catalogQuery}
@@ -41,40 +41,37 @@ export function PsPlusCatalogPage({
             placeholder="名称、PS4、PS5 或会员等级"
           />
         </label>
-        <div className="catalog-toolbar-actions">
-          <div className="field catalog-display-field">
-            <span>展示方式</span>
-            <div className="display-mode-switch" role="group" aria-label="PS Plus 展示方式">
-              <button
-                className={displayMode === "grid" ? "active" : ""}
-                type="button"
-                aria-pressed={displayMode === "grid"}
-                onClick={() => onDisplayModeChange("grid")}
-              >
-                网格
-              </button>
-              <button
-                className={displayMode === "list" ? "active" : ""}
-                type="button"
-                aria-pressed={displayMode === "list"}
-                onClick={() => onDisplayModeChange("list")}
-              >
-                列表
-              </button>
-            </div>
+        <div className="field catalog-display-field">
+          <span>展示方式</span>
+          <div className="display-mode-switch" role="group" aria-label="PS Plus 展示方式">
+            <button
+              className={displayMode === "grid" ? "active" : ""}
+              type="button"
+              aria-pressed={displayMode === "grid"}
+              onClick={() => onDisplayModeChange("grid")}
+            >
+              网格
+            </button>
+            <button
+              className={displayMode === "list" ? "active" : ""}
+              type="button"
+              aria-pressed={displayMode === "list"}
+              onClick={() => onDisplayModeChange("list")}
+            >
+              列表
+            </button>
           </div>
+        </div>
+        <div className="catalog-actions">
           {accessStatus === "unlocked" ? (
-            <div className="catalog-actions">
-              <span>官方目录</span>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={catalogStatus === "loading"}
-                onClick={() => onLoad(true)}
-              >
-                {catalogStatus === "loading" ? "更新中…" : "更新目录"}
-              </button>
-            </div>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={catalogStatus === "loading"}
+              onClick={() => onLoad(true)}
+            >
+              {catalogStatus === "loading" ? "更新中" : "立即更新"}
+            </button>
           ) : null}
         </div>
       </div>
@@ -87,7 +84,9 @@ export function PsPlusCatalogPage({
           <strong>{filteredGames.length}</strong>
           <span>当前结果</span>
         </div>
-        <p>港区 PlayStation Plus 升级与高级会员游戏目录</p>
+        <p>
+          这里展示港区 PlayStation Plus 完整游戏目录，不会自动加入购买记录。目录会随会员服务调整。
+        </p>
       </div>
       {catalog ? (
         <p className="catalog-updated">

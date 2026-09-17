@@ -2,13 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { hasValidAccessCookie } from "@/lib/auth/access";
 import { createLedgerDocument, type GameRecord } from "@/lib/ledger/schema";
 import {
-  historicalFeedUrl,
-  isPastOrCurrentMonth,
-  membershipCoversMonth,
-} from "@/lib/game/ps-plus-history";
-import { enrichMonthlyGames, parsePsPlusMonthlyFeed } from "@/lib/game/ps-plus-monthly";
-import { reconcileMonthlyGames } from "@/lib/game/ps-plus-monthly-sync";
-import {
   LedgerConflictError,
   readAppSettings,
   readLedgerFromSqlite,
@@ -18,69 +11,17 @@ import {
 export const runtime = "nodejs";
 const feedUrl = "https://blog.playstation.com/category/ps-plus/feed/";
 
-export async function GET(request: NextRequest) {
-  if (!(await hasValidAccessCookie(request)))
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const month = new URL(request.url).searchParams.get("month")?.trim() || "";
-  if (!isPastOrCurrentMonth(month))
-    return NextResponse.json({ error: "请选择有效的历史月份" }, { status: 400 });
-
-  const settings = await readAppSettings();
-  if (!membershipCoversMonth(settings.membershipPeriods, month))
-    return NextResponse.json(
-      { error: "所选月份不在已保存的 PS Plus 会员时间段内" },
-      { status: 403 },
-    );
-
-  try {
-    const monthly = await fetchMonthlyGames(month);
-    if (!monthly)
-      return NextResponse.json({ error: `暂未找到 ${month} 的 PS Plus 会免阵容` }, { status: 404 });
-    const official = await enrichMonthlyGames(monthly.games);
-    if (!official.games.length) throw new Error("未能从 PlayStation Store 匹配到该月游戏");
-    const ledger = await readLedgerFromSqlite();
-    const games = official.games.map((game) => ({
-      ...game,
-      alreadyAdded: !reconcileMonthlyGames(
-        ledger.records,
-        [game],
-        month,
-        `${month}-01`,
-        () => "preview",
-      ).additions.length,
-    }));
-    return NextResponse.json({ month, games, unresolved: official.unresolved });
-  } catch (error) {
-    return NextResponse.json(
-      { error: `历史会免查询失败：${error instanceof Error ? error.message : String(error)}` },
-      { status: 502 },
-    );
-  }
-}
-
 export async function POST(request: NextRequest) {
   if (!(await hasValidAccessCookie(request)))
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const payload = (await request.json().catch(() => ({}))) as {
-    month?: unknown;
-    sourceTitles?: unknown;
-  };
-  const requestedMonth = typeof payload.month === "string" ? payload.month.trim() : "";
-  const historical = Boolean(requestedMonth);
-  if (historical && !isPastOrCurrentMonth(requestedMonth))
-    return NextResponse.json({ error: "请选择有效的历史月份" }, { status: 400 });
   const settings = await readAppSettings();
-  if (historical && !membershipCoversMonth(settings.membershipPeriods, requestedMonth))
-    return NextResponse.json(
-      { error: "所选月份不在已保存的 PS Plus 会员时间段内" },
-      { status: 403 },
-    );
-  if (!historical && !settings.psPlusEnabled)
+  if (!settings.showPlayStation)
+    return NextResponse.json({ added: 0, games: [], message: "PlayStation 游戏库未启用" });
+  if (!settings.psPlusEnabled)
     return NextResponse.json({ added: 0, games: [], message: "PS Plus 会员未开启" });
-  if (!historical && !settings.psPlusAutoAddMonthly)
+  if (!settings.psPlusAutoAddMonthly)
     return NextResponse.json({ added: 0, games: [], message: "PS Plus 会免自动入库未开启" });
   if (
-    !historical &&
     settings.psPlusExpiresAt &&
     settings.psPlusExpiresAt < new Date().toISOString().slice(0, 10)
   ) {
@@ -88,49 +29,49 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const monthly = await fetchMonthlyGames(requestedMonth);
+    const response = await fetch(feedUrl, {
+      headers: { "user-agent": "GameNote/1.0" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const monthly = parseMonthlyGames(await response.text());
     if (!monthly)
-      return NextResponse.json({
-        added: 0,
-        games: [],
-        message: historical
-          ? `暂未找到 ${requestedMonth} 的 PS Plus 会免阵容`
-          : "暂未找到当月 PS Plus 会免阵容",
-      });
-    const official = await enrichMonthlyGames(monthly.games);
-    if (!official.games.length) throw new Error("未能从 PlayStation Store 匹配到当月游戏");
-    const selectedSourceTitles = new Set(
-      Array.isArray(payload.sourceTitles)
-        ? payload.sourceTitles
-            .filter((title): title is string => typeof title === "string")
-            .map(normalizeSourceTitle)
-        : [],
-    );
-    const selectedGames = historical
-      ? official.games.filter((game) =>
-          selectedSourceTitles.has(normalizeSourceTitle(game.sourceTitle)),
-        )
-      : official.games;
-    if (historical && !selectedGames.length)
-      return NextResponse.json({ error: "请至少选择一款需要补录的游戏" }, { status: 400 });
+      return NextResponse.json({ added: 0, games: [], message: "暂未找到当月 PS Plus 会免阵容" });
     let additions: GameRecord[] = [];
-    let updated = 0;
-    let removedDuplicates = 0;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const ledger = await readLedgerFromSqlite();
-      const reconciliation = reconcileMonthlyGames(
-        ledger.records,
-        selectedGames,
-        monthly.month,
-        historical ? `${monthly.month}-01` : new Date().toISOString().slice(0, 10),
-        () => crypto.randomUUID(),
-      );
-      additions = reconciliation.additions;
-      updated = reconciliation.updated;
-      removedDuplicates = reconciliation.removedDuplicates;
-      if (!additions.length && !updated && !removedDuplicates) break;
+      additions = monthly.games
+        .filter(
+          (title) =>
+            !ledger.records.some(
+              (record) =>
+                record.notes.includes(`PS Plus 会免 ${monthly.month}`) &&
+                normalizeTitle(record.title) === normalizeTitle(title),
+            ),
+        )
+        .map((title): GameRecord => ({
+          id: crypto.randomUUID(),
+          platform: "PlayStation",
+          title,
+          price: 0,
+          currency: "CNY",
+          purchaseDate: new Date().toISOString().slice(0, 10),
+          region: "其他",
+          format: "数字版",
+          seller: "PlayStation Plus",
+          coverUrl: "",
+          officialUrl: monthly.url,
+          notes: `PS Plus 会免 ${monthly.month}`,
+          soldDate: "",
+          soldPrice: 0,
+          soldCurrency: "CNY",
+        }));
+      if (!additions.length) break;
       try {
-        await writeLedgerToSqlite(createLedgerDocument(reconciliation.records), ledger.updatedAt);
+        await writeLedgerToSqlite(
+          createLedgerDocument([...additions, ...ledger.records]),
+          ledger.updatedAt,
+        );
         break;
       } catch (error) {
         if (!(error instanceof LedgerConflictError) || attempt === 2) throw error;
@@ -138,19 +79,9 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({
       added: additions.length,
-      updated,
-      removedDuplicates,
-      games: additions.map((game) => game.title),
+      games: monthly.games,
       month: monthly.month,
       records: additions,
-      unresolved: official.unresolved,
-      message: syncMessage(
-        additions.length,
-        updated,
-        removedDuplicates,
-        official.unresolved,
-        historical,
-      ),
     });
   } catch (error) {
     return NextResponse.json(
@@ -160,36 +91,46 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function fetchMonthlyGames(month: string) {
-  const url = month ? historicalFeedUrl(month) : feedUrl;
-  const response = await fetch(url, {
-    headers: { "user-agent": "GameNote/1.0" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) throw new Error(`PlayStation Blog HTTP ${response.status}`);
-  return parsePsPlusMonthlyFeed(await response.text(), new Date(), month);
+function parseMonthlyGames(xml: string) {
+  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+  for (const match of items) {
+    const item = match[1];
+    const rawTitle = decodeEntities(textBetween(item, "title"));
+    if (!/PlayStation Plus Monthly Games for/i.test(rawTitle) || /Game Catalog/i.test(rawTitle))
+      continue;
+    const monthName = rawTitle.match(/Monthly Games for ([A-Za-z]+)/i)?.[1];
+    const currentMonth = new Date().toLocaleString("en-US", { month: "long" });
+    if (!monthName || monthName.toLowerCase() !== currentMonth.toLowerCase()) continue;
+    const separator = rawTitle.match(/(?:–|—|:| - )/);
+    if (!separator || separator.index === undefined) continue;
+    const games = rawTitle
+      .slice(separator.index + separator[0].length)
+      .split(/,| and /i)
+      .map((title) => title.trim())
+      .filter(Boolean);
+    if (!games.length) continue;
+    const month = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+    return { games, month, url: decodeEntities(textBetween(item, "link")) };
+  }
+  return null;
 }
 
-function normalizeSourceTitle(value: string) {
+function textBetween(value: string, tag: string) {
+  return (
+    value
+      .match(
+        new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, "i"),
+      )?.[1]
+      ?.trim() || ""
+  );
+}
+function decodeEntities(value: string) {
+  return value
+    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, "–")
+    .replace(/&#8217;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/<[^>]+>/g, "");
+}
+function normalizeTitle(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, "");
-}
-
-function syncMessage(
-  added: number,
-  updated: number,
-  removed: number,
-  unresolved: string[],
-  historical = false,
-) {
-  const changes = [
-    added ? `${historical ? "补录" : "新增"} ${added} 款` : "",
-    updated ? `更新 ${updated} 款` : "",
-    removed ? `清理 ${removed} 条重复记录` : "",
-  ].filter(Boolean);
-  const result = changes.length
-    ? changes.join("，")
-    : historical
-      ? "所选会免已补录"
-      : "当月会免已同步";
-  return unresolved.length ? `${result}；${unresolved.join("、")} 暂未匹配到港区 Store` : result;
 }

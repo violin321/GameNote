@@ -7,6 +7,7 @@ import {
 } from "@/lib/ledger/repository";
 import { createLedgerDocument, normalizeRecords } from "@/lib/ledger/schema";
 import { ledgerLimits } from "@/lib/ledger/limits";
+import { listPlayGames, listPurchasePlaySummaries } from "@/lib/play-history/repository";
 
 type SavePayload = {
   records?: unknown;
@@ -15,12 +16,26 @@ type SavePayload = {
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const document = await readLedgerFromSqlite();
-    return NextResponse.json(document, {
-      headers: { "cache-control": "no-store" },
-    });
+    const authenticated = await hasValidAccessCookie(request);
+    return NextResponse.json(
+      {
+        ...document,
+        ...(authenticated
+          ? {
+              playSummaries: await listPurchasePlaySummaries(),
+              libraryPlayGames: (await listPlayGames("recent", "desc", "")).filter(
+                (game) => !game.platform.toLowerCase().includes("playstation"),
+              ),
+            }
+          : {}),
+      },
+      {
+        headers: { "cache-control": "no-store" },
+      },
+    );
   } catch (error) {
     return storageFailure("读取数据库记录失败", error);
   }

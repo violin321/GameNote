@@ -2,20 +2,9 @@ export type Region = "日版" | "港版" | "台版" | "美版" | "欧版" | "其
 export type GamePlatform = "Nintendo Switch" | "PlayStation";
 export type GameFormat = "实体卡带" | "实体光盘" | "数字版";
 export type Currency = "CNY" | "JPY" | "HKD" | "USD" | "EUR" | "BRL";
-export type MembershipService = "Nintendo Switch Online" | "PlayStation Plus";
-
-export type MembershipPeriod = {
-  id: string;
-  service: MembershipService;
-  startDate: string;
-  endDate: string;
-  price: number;
-  currency: Currency;
-};
 
 export type GameRecord = {
   id: string;
-  sourceKey?: string;
   platform: GamePlatform;
   title: string;
   price: number;
@@ -37,15 +26,6 @@ export type AccessStatus = "checking" | "locked" | "unlocked";
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 export type ActiveView = "records" | "form" | "settings" | "ps-plus-catalog" | "memberships";
 export type RecordDisplayMode = "grid" | "list";
-
-export type VersionInfo = {
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  checkedAt: string;
-  stale?: boolean;
-  error?: string;
-};
 
 export type ShareOptions = {
   showPrice: boolean;
@@ -87,7 +67,6 @@ export type SettingsState = {
   psPlusAutoAddMonthly: boolean;
   nsOnlineEnabled: boolean;
   nsOnlineExpiresAt: string;
-  membershipPeriods: MembershipPeriod[];
 };
 
 export type PsPlusCatalogGame = {
@@ -107,14 +86,6 @@ export type PsPlusCatalog = {
   stale?: boolean;
 };
 
-export type HistoricalMonthlyGame = {
-  title: string;
-  sourceTitle: string;
-  coverUrl: string;
-  officialUrl: string;
-  alreadyAdded: boolean;
-};
-
 export type NintendoCoverResult = {
   id: string;
   title: string;
@@ -127,12 +98,7 @@ export type NintendoCoverResult = {
   price: number | null;
   currency: string | null;
   source:
-    | "mainland"
-    | "hong-kong"
-    | "algolia"
-    | "page"
-    | "playstation-hong-kong"
-    | "playstation-page";
+    "mainland" | "hong-kong" | "algolia" | "page" | "playstation-hong-kong" | "playstation-page";
 };
 
 export type LedgerDocument = {
@@ -158,3 +124,6 @@ export type ToolbarItem = {
 };
 
 export type ToolbarGroup = { id: string; label: string; items: ToolbarItem[] };
+
+export type { PurchasePlaySummary } from "@/lib/play-history/types";
+export type LibraryPlayGame = import("@/lib/play-history/types").PlayGameSummary;

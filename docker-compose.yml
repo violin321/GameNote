@@ -4,11 +4,19 @@ services:
     container_name: gamenote
     restart: unless-stopped
     init: true
+    user: "${GAMENOTE_UID:-10001}:${GAMENOTE_GID:-10001}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "3000:3000"
     environment:
       PS_PLUS_CATALOG_REFRESH_HOURS: ${PS_PLUS_CATALOG_REFRESH_HOURS:-12}
       JWT_SECRET: ${JWT_SECRET:?请复制 .env.example 为 .env，并配置 JWT_SECRET}
-      APP_DATABASE_FILE: "/data/records.sqlite"
+      APP_DATABASE_FILE: "/data/ns2.sqlite"
     volumes:
       - ./data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770

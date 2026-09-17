@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasValidAccessCookie } from "@/lib/auth/access";
 import { normalizeChineseGameTitle } from "@/lib/game/title-normalization";
-import { readAppCache, writeAppCache } from "@/lib/ledger/repository";
+import { readAppCache, readAppSettings, writeAppCache } from "@/lib/ledger/repository";
 
 export const runtime = "nodejs";
 
@@ -39,6 +39,9 @@ type CatalogPayload = { fetchedAt: string; games: CatalogGame[] };
 const catalogCacheKey = "ps-plus-catalog-v1";
 
 export async function GET(request: NextRequest) {
+  const settings = await readAppSettings();
+  if (!settings.showPlayStation || !settings.showPsPlusCatalog)
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
   const force = request.nextUrl.searchParams.get("refresh") === "1";
   if (force && !(await hasValidAccessCookie(request))) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -79,14 +82,14 @@ function normalizeCachedPayload(value: unknown): CatalogPayload | null {
   const games = source.games.filter((game): game is CatalogGame =>
     Boolean(
       game &&
-        typeof game === "object" &&
-        typeof game.id === "string" &&
-        typeof game.title === "string" &&
-        typeof game.localizedTitle === "string" &&
-        typeof game.coverUrl === "string" &&
-        typeof game.officialUrl === "string" &&
-        Array.isArray(game.platforms) &&
-        typeof game.tier === "string",
+      typeof game === "object" &&
+      typeof game.id === "string" &&
+      typeof game.title === "string" &&
+      typeof game.localizedTitle === "string" &&
+      typeof game.coverUrl === "string" &&
+      typeof game.officialUrl === "string" &&
+      Array.isArray(game.platforms) &&
+      typeof game.tier === "string",
     ),
   );
   return games.length ? { fetchedAt: source.fetchedAt, games } : null;

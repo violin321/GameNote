@@ -29,18 +29,12 @@ export async function GET(request: NextRequest) {
 
     const response = await fetch(url, {
       headers: { "user-agent": "Mozilla/5.0 GameNote/1.0" },
-      redirect: "follow",
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
-    const finalUrl = new URL(response.url || url.toString());
-    if (!(await isPublicImageUrl(finalUrl))) {
-      return NextResponse.json({ error: "image host unavailable" }, { status: 400 });
-    }
-    const declaredContentType = (response.headers.get("content-type") || "")
-      .split(";", 1)[0]
-      .toLowerCase();
+    const contentType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
 
-    if (!response.ok) {
+    if (!response.ok || !allowedImageTypes.has(contentType)) {
       return NextResponse.json({ error: "image unavailable" }, { status: 502 });
     }
 
@@ -53,11 +47,7 @@ export async function GET(request: NextRequest) {
     if (image.byteLength > maxImageBytes) {
       return NextResponse.json({ error: "image too large" }, { status: 413 });
     }
-    const bytes = new Uint8Array(image);
-    const contentType = allowedImageTypes.has(declaredContentType)
-      ? declaredContentType
-      : detectImageType(bytes);
-    if (!contentType || !hasExpectedImageSignature(bytes, contentType))
+    if (!hasExpectedImageSignature(new Uint8Array(image), contentType))
       return NextResponse.json({ error: "invalid image data" }, { status: 415 });
 
     return new NextResponse(image, {
@@ -90,14 +80,6 @@ function hasExpectedImageSignature(bytes: Uint8Array, contentType: string) {
 
 function ascii(bytes: Uint8Array, start: number, end: number) {
   return String.fromCharCode(...bytes.slice(start, end));
-}
-
-function detectImageType(bytes: Uint8Array) {
-  if (hasExpectedImageSignature(bytes, "image/jpeg")) return "image/jpeg";
-  if (hasExpectedImageSignature(bytes, "image/png")) return "image/png";
-  if (hasExpectedImageSignature(bytes, "image/webp")) return "image/webp";
-  if (hasExpectedImageSignature(bytes, "image/avif")) return "image/avif";
-  return null;
 }
 
 async function isPublicImageUrl(url: URL) {

@@ -13,6 +13,8 @@ import type {
   GamePlatform,
   GameRecord,
   LedgerDocument,
+  LibraryPlayGame,
+  PurchasePlaySummary,
   Region,
 } from "./types";
 import {
@@ -63,20 +65,14 @@ export function normalizeImportedRecord(value: unknown): GameRecord | null {
           : "";
   return {
     id: limitText(record.id, ledgerLimits.id) || createId(),
-    ...(typeof record.sourceKey === "string" && record.sourceKey
-      ? { sourceKey: limitText(record.sourceKey, ledgerLimits.id) }
-      : {}),
     platform,
     title: limitText(record.title, ledgerLimits.title),
     price: validLedgerNumber(record.price),
     currency,
-    purchaseDate:
-      typeof record.purchaseDate === "string" && record.purchaseDate
-        ? record.purchaseDate
-        : new Date().toISOString().slice(0, 10),
+    purchaseDate: typeof record.purchaseDate === "string" ? record.purchaseDate : "",
     region,
     format,
-    seller: isPhysicalFormat(format) ? limitText(record.seller, ledgerLimits.seller) : "",
+    seller: limitText(record.seller, ledgerLimits.seller),
     coverUrl: limitText(record.coverUrl, ledgerLimits.url),
     officialUrl: limitText(officialUrl, ledgerLimits.url),
     notes: limitText(record.notes, ledgerLimits.notes),
@@ -86,11 +82,12 @@ export function normalizeImportedRecord(value: unknown): GameRecord | null {
   };
 }
 
-export async function fetchLedgerFromServer(): Promise<LedgerDocument> {
+export async function fetchLedgerFromServer(): Promise<
+  LedgerDocument & { playSummaries?: PurchasePlaySummary[]; libraryPlayGames?: LibraryPlayGame[] }
+> {
   const response = await fetch("/api/records", { cache: "no-store" });
   const payload = (await response.json().catch(() => ({}))) as
-    | Partial<LedgerDocument>
-    | { error?: string };
+    Partial<LedgerDocument> | { error?: string };
   if (!response.ok)
     throw new Error(
       "error" in payload && payload.error
@@ -107,6 +104,14 @@ export async function fetchLedgerFromServer(): Promise<LedgerDocument> {
           .map(normalizeImportedRecord)
           .filter((record): record is GameRecord => Boolean(record))
       : [],
+    playSummaries:
+      "playSummaries" in payload && Array.isArray(payload.playSummaries)
+        ? (payload.playSummaries as PurchasePlaySummary[])
+        : undefined,
+    libraryPlayGames:
+      "libraryPlayGames" in payload && Array.isArray(payload.libraryPlayGames)
+        ? (payload.libraryPlayGames as LibraryPlayGame[])
+        : undefined,
   };
 }
 
