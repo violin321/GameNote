@@ -2,11 +2,11 @@
 
 GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支持 Nintendo Switch、PlayStation、PS Plus 游戏目录、会员记录、价格统计、JSON 备份和 AI 订单截图识别。
 
-本工作树还包含 NS2 历史游玩、Moon 日报、Nintendo Store 累计快照与收藏关联等本地扩展。下文的 `dingding229/gamenote:latest` 是**上游镜像**，不会自动包含这些尚未合并的功能；不要将本地 NS2 数据库挂载给上游镜像试运行。扩展版应从本工作树构建专用镜像，并固定经验证的版本/提交后再部署。
+本工作树还包含 NS2 历史游玩、Moon 日报、Nintendo Store 累计快照与收藏关联等本地扩展。上游的 `dingding229/gamenote:latest` **不包含**这些功能；不要将 NS2 数据库挂载给上游镜像。个人 NS2 镜像已包含 Moon 采集服务和 Store 探测代码；独立授权和历史状态保存在持久化 `/data` 卷，部署方法见 [单镜像运行说明](docs/container-runtime.md)。
 
 个人版源码整理与 Docker Hub 发版条件见 [个人维护与发布手册](docs/personal-release.md)。当前上游未提供可识别的 LICENSE，公开发布衍生镜像前需确认再分发许可。
 
-应用采用 Next.js、React、TypeScript 与 SQLite 构建，可通过 Docker Compose 部署。个人版在配置发布凭据并确认许可后，可由 GitHub Actions 构建并发布到 Docker Hub；当前未配置发布凭据。游客可以只读浏览收藏，管理员登录后才能修改数据和使用管理工具。
+应用采用 Next.js、React、TypeScript 与 SQLite 构建，可通过 Docker Compose 部署。个人版由 GitHub Actions 构建并发布到 Docker Hub；游客可以只读浏览收藏，管理员登录后才能修改数据和使用管理工具。
 
 ## 主要功能
 
@@ -75,14 +75,15 @@ GameNote 是一个面向个人部署的游戏收藏与购买记录应用，支�
 
 ## 快速部署
 
-要求：Docker Engine、Docker Compose、`curl` 与 `openssl`。部署只会从 Docker Hub 拉取预构建镜像，不需要在服务器安装 Node.js、下载源码或执行本地构建。
+要求：Docker Engine、Docker Compose、Git 与 `openssl`。下载此个人分支的部署文件，填写已经发布的固定 NS2 镜像标签或 digest；无需在服务器安装 Node.js 或执行本地构建。
 
 ```bash
-mkdir -p gamenote/data
+git clone --branch codex/personal-ns2 --single-branch https://github.com/violin321/GameNote.git gamenote
 cd gamenote
-curl -fsSLO https://raw.githubusercontent.com/dingding229/GameNote/main/docker-compose.yml
+mkdir -p data
 umask 077
-printf 'JWT_SECRET=%s\n' "$(openssl rand -base64 48)" > .env
+cp .env.example .env
+# 在 .env 中填写随机 JWT_SECRET 和已发布的 GAMENOTE_IMAGE 固定版本或 digest。
 ```
 
 随后拉取镜像并启动：
@@ -92,7 +93,7 @@ docker compose pull
 docker compose up -d
 ```
 
-浏览器访问 `http://localhost:3000`。第一次访问时点击“注册管理员”，然后进入设置页面配置游戏库、会员信息及 AI 服务。
+浏览器访问 `http://localhost:3000`。第一次访问时点击“注册管理员”，然后在设置页分别授权家长控制与 Nintendo Store；首次运行的数据卷权限、升级和授权保存说明见 [单镜像运行说明](docs/container-runtime.md)。
 
 ## Docker Compose 镜像安装
 

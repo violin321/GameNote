@@ -18,4 +18,4 @@ fi
 rm -f /data/.write-test
 
 node scripts/migrate-play-history.mjs
-exec "$@"
+exec node scripts/container-runtime.mjs "$@"

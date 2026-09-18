@@ -33,6 +33,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV APP_DATABASE_FILE=/data/ns2.sqlite
+ENV MOON_SIDECAR_DIRECTORY=/data/moon
+ENV MOON_SIDECAR_SOCKET_PATH=/data/moon/run/sidecar.sock
+ENV MOON_SIDECAR_API_KEY_FILE=/data/moon/secrets/api-key
+ENV MOON_AUTO_SYNC_ENABLED=1
+ENV MOON_SCHEDULER_STATE_FILE=/data/moon/state/app-scheduler.sqlite
+ENV NINTENDO_STORE_PROBE_DIR=/data/nintendo-store
+ENV NINTENDO_STORE_AUTO_SYNC_ENABLED=1
+ENV NINTENDO_STORE_SCHEDULER_STATE_FILE=/data/nintendo-store/scheduler.sqlite
 
 RUN addgroup -S -g ${APP_GID} nodejs \
   && adduser -S -D -H -u ${APP_UID} -G nodejs nextjs \
@@ -44,12 +52,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/migrations ./migrations
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=builder --chown=nextjs:nodejs /app/services/moon-sidecar ./services/moon-sidecar
 COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0555 /usr/local/bin/docker-entrypoint.sh
 
 USER nextjs:nodejs
+VOLUME ["/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1
+  CMD node scripts/container-health.mjs
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]

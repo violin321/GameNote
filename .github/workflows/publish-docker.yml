@@ -85,6 +85,32 @@ jobs:
             OCI_REVISION=${{ github.sha }}
             APP_VERSION=${{ needs.version.outputs.app_version }}
 
+      - name: Smoke-test bundled Moon and Web
+        shell: bash
+        env:
+          IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/gamenote:amd64-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -fv gamenote-smoke >/dev/null 2>&1 || true' EXIT
+          secret="$(openssl rand -hex 32)"
+          docker run -d --name gamenote-smoke --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e JWT_SECRET="$secret" "$IMAGE" >/dev/null
+          for attempt in {1..45}; do
+            state="$(docker inspect -f '{{.State.Status}}' gamenote-smoke)"
+            health="$(docker inspect -f '{{.State.Health.Status}}' gamenote-smoke)"
+            if [[ "$health" == "healthy" ]]; then break; fi
+            if [[ "$state" != "running" ]]; then
+              echo "Container exited before becoming healthy" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          [[ "$health" == "healthy" ]] || { echo "Container health check timed out" >&2; exit 1; }
+          docker exec gamenote-smoke sh -c \
+            'test -s /data/moon/secrets/api-key && test -d /data/nintendo-store && node scripts/container-health.mjs'
+
   publish_arm64:
     name: Build and publish arm64
     needs: [version, publish_amd64]

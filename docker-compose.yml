@@ -1,6 +1,6 @@
 services:
   gamenote:
-    image: ${GAMENOTE_IMAGE:-dingding229/gamenote:latest}
+    image: ${GAMENOTE_IMAGE:?Set GAMENOTE_IMAGE to a fixed NS2 image tag}
     container_name: gamenote
     restart: unless-stopped
     init: true
@@ -16,6 +16,8 @@ services:
       PS_PLUS_CATALOG_REFRESH_HOURS: ${PS_PLUS_CATALOG_REFRESH_HOURS:-12}
       JWT_SECRET: ${JWT_SECRET:?请复制 .env.example 为 .env，并配置 JWT_SECRET}
       APP_DATABASE_FILE: "/data/ns2.sqlite"
+      MOON_AUTO_SYNC_ENABLED: ${MOON_AUTO_SYNC_ENABLED:-1}
+      NINTENDO_STORE_AUTO_SYNC_ENABLED: ${NINTENDO_STORE_AUTO_SYNC_ENABLED:-1}
     volumes:
       - ./data:/data
     tmpfs:
