@@ -9,6 +9,8 @@ RUN npm ci
 
 FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /app
+ARG OCI_REVISION=unknown
+ENV APP_REVISION=${OCI_REVISION}
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -20,10 +22,13 @@ WORKDIR /app
 ARG APP_UID=10001
 ARG APP_GID=10001
 ARG OCI_REVISION=unknown
+ARG APP_VERSION=unknown
 LABEL org.opencontainers.image.title="GameNote NS2" \
   org.opencontainers.image.source="https://github.com/violin321/GameNote" \
-  org.opencontainers.image.revision="${OCI_REVISION}"
+  org.opencontainers.image.revision="${OCI_REVISION}" \
+  org.opencontainers.image.version="${APP_VERSION}"
 ENV NODE_ENV=production
+ENV APP_REVISION=${OCI_REVISION}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0

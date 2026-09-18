@@ -17,9 +17,28 @@ jobs:
   quality:
     uses: ./.github/workflows/quality.yml
 
+  version:
+    name: Validate release version
+    needs: quality
+    runs-on: ubuntu-24.04
+    outputs:
+      app_version: ${{ steps.check.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check package, lockfile and tag
+        id: check
+        shell: bash
+        run: |
+          tag=""
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          version="$(node scripts/check-release-version.mjs "$tag")"
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
+
   publish_amd64:
     name: Build and publish amd64
-    needs: quality
+    needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -64,10 +83,11 @@ jobs:
           sbom: true
           build-args: |
             OCI_REVISION=${{ github.sha }}
+            APP_VERSION=${{ needs.version.outputs.app_version }}
 
   publish_arm64:
     name: Build and publish arm64
-    needs: publish_amd64
+    needs: [version, publish_amd64]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
@@ -98,6 +118,7 @@ jobs:
           sbom: true
           build-args: |
             OCI_REVISION=${{ github.sha }}
+            APP_VERSION=${{ needs.version.outputs.app_version }}
 
   publish_manifest:
     name: Publish multi-platform manifest

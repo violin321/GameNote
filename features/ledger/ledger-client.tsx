@@ -14,6 +14,7 @@ import {
 import { normalizeChineseSearchText } from "@/lib/game/title-normalization";
 import { ledgerLimits } from "@/lib/ledger/limits";
 import { defaultThemeColor, themeColorContent } from "@/lib/ui/theme-color";
+import type { AppRelease } from "@/lib/release/version";
 import {
   shellAuthChangedEvent,
   shellAuthRequestedEvent,
@@ -120,10 +121,12 @@ export default function LedgerClient({
   initialPlatform,
   initialView = "records",
   beforeContent,
+  appRelease,
 }: {
   initialPlatform: GamePlatform;
   initialView?: ActiveView;
   beforeContent?: ReactNode;
+  appRelease?: AppRelease;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveRequestRef = useRef(0);
@@ -1683,6 +1686,7 @@ export default function LedgerClient({
 
             {activeView === "settings" && accessStatus === "unlocked" ? (
               <SettingsPage
+                appRelease={appRelease}
                 settings={settings}
                 setSettings={setSettings}
                 settingsStatus={settingsStatus}

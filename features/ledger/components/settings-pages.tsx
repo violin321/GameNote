@@ -1,5 +1,6 @@
 import type { ChangeEvent, Dispatch, FormEvent, RefObject, SetStateAction } from "react";
 import type { SettingsState } from "../types";
+import type { AppRelease } from "@/lib/release/version";
 import { ModelCombobox } from "./model-combobox";
 import { NintendoConnectorPanel } from "./nintendo-connector-panel";
 import { MoonConnectorPanel } from "@/features/moon/moon-connector-panel";
@@ -9,6 +10,7 @@ import { NintendoStorePanel } from "./nintendo-store-panel";
 type SettingsUpdater = Dispatch<SetStateAction<SettingsState>>;
 
 type SettingsPageProps = {
+  appRelease?: AppRelease;
   settings: SettingsState;
   setSettings: SettingsUpdater;
   settingsStatus: string;
@@ -26,6 +28,7 @@ type SettingsPageProps = {
 };
 
 export function SettingsPage({
+  appRelease,
   settings,
   setSettings,
   settingsStatus,
@@ -297,6 +300,27 @@ export function SettingsPage({
           </button>
         </div>
       </section>
+      {appRelease ? (
+        <section className="settings-section" aria-labelledby="app-release-heading">
+          <div>
+            <h3 id="app-release-heading">运行版本</h3>
+            <p>核对当前站点与发布镜像所用的代码版本。</p>
+          </div>
+          <div className="settings-release-details">
+            <dl>
+              <div>
+                <dt>应用版本</dt>
+                <dd>v{appRelease.version}</dd>
+              </div>
+              <div>
+                <dt>构建提交</dt>
+                <dd>{appRelease.revision ?? "本地构建，未记录提交"}</dd>
+              </div>
+            </dl>
+            <p>版本由发布流程管理；这里显示当前运行版本，不会随“保存设置”更改。</p>
+          </div>
+        </section>
+      ) : null}
       <footer>
         <span role="status" aria-live="polite">
           {settingsStatus}

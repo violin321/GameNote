@@ -1,6 +1,6 @@
 {
   "name": "switch-cartridge-ledger",
-  "version": "0.1.0",
+  "version": "1.0.15-ns.4",
   "private": true,
   "engines": {
     "node": ">=22.13.0"

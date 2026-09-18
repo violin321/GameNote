@@ -1554,6 +1554,37 @@ a:focus-visible,
   font-size: 0.8rem;
   font-weight: 700;
 }
+.settings-release-details {
+  min-width: 0;
+}
+.settings-release-details dl {
+  margin: 0;
+}
+.settings-release-details dl > div {
+  align-items: baseline;
+  border-bottom: 1px solid var(--color-base-300);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  justify-content: space-between;
+  padding: 0.65rem 0;
+}
+.settings-release-details dt,
+.settings-release-details > p {
+  color: var(--color-base-content);
+  font-size: 0.8rem;
+  opacity: 0.72;
+}
+.settings-release-details dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.settings-release-details > p {
+  line-height: 1.55;
+  margin-top: 0.8rem;
+}
 .nintendo-connector {
   background: color-mix(in srgb, var(--color-base-200) 54%, var(--color-base-100));
   border: 1px solid var(--color-base-300);
